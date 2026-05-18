@@ -34,8 +34,9 @@ jobs:
     needs: ci-gate
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'push' ||
-      contains(fromJSON('["all","frontend"]'), github.event.inputs.target)
+      (github.event_name == 'push' ||
+      contains(fromJSON('["all","frontend"]'), github.event.inputs.target)) &&
+      secrets.VERCEL_TOKEN != ''
     environment:
       name: ${{ github.event.inputs.environment || 'production' }}
       url: ${{ steps.vercel-deploy.outputs.url }}
@@ -96,8 +97,9 @@ jobs:
     needs: ci-gate
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'push' ||
-      contains(fromJSON('["all","backend"]'), github.event.inputs.target)
+      (github.event_name == 'push' ||
+      contains(fromJSON('["all","backend"]'), github.event.inputs.target)) &&
+      secrets.RAILWAY_TOKEN != ''
     environment:
       name: ${{ github.event.inputs.environment || 'production' }}
 
@@ -150,8 +152,9 @@ jobs:
     needs: ci-gate
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'push' ||
-      contains(fromJSON('["all","worker"]'), github.event.inputs.target)
+      (github.event_name == 'push' ||
+      contains(fromJSON('["all","worker"]'), github.event.inputs.target)) &&
+      secrets.RAILWAY_TOKEN != ''
 
     steps:
       - uses: actions/checkout@v4
