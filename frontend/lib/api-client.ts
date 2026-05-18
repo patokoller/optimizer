@@ -14,6 +14,22 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// ── snake_case → camelCase (applied to all API responses) ────────────────
+function toCamel(s: string): string {
+  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+function transformKeys(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(transformKeys);
+  if (obj !== null && typeof obj === "object") {
+    return Object.fromEntries(
+      Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
+        toCamel(k), transformKeys(v),
+      ])
+    );
+  }
+  return obj;
+}
+
 class APIClient {
   private http: AxiosInstance;
 
@@ -24,9 +40,12 @@ class APIClient {
       headers: { "Content-Type": "application/json" },
     });
 
-    // Response interceptor — uniform error shape
+    // Response interceptor — convert snake_case keys + uniform error shape
     this.http.interceptors.response.use(
-      (r) => r,
+      (r) => {
+        r.data = transformKeys(r.data);
+        return r;
+      },
       (err: AxiosError<{ detail: string }>) => {
         const msg = err.response?.data?.detail ?? err.message ?? "Unknown error";
         return Promise.reject(new Error(msg));
