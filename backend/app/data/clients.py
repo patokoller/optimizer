@@ -102,6 +102,11 @@ from datetime import datetime
 logger_av = logging.getLogger("alphavantage")
 
 
+class AlphaVantageError(Exception):
+    """Raised when Alpha Vantage API fails — blocks Fundamental strategy only."""
+    pass
+
+
 def _safe_float(val) -> float:
     """Convert AV field to float — handles None, 'None', '', and missing."""
     if val is None or val == "None" or val == "":
