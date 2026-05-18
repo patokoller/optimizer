@@ -9,7 +9,7 @@ from sqlalchemy import (
     Column, String, Float, Integer, Boolean, DateTime,
     ForeignKey, Enum, Text, ARRAY, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -56,7 +56,7 @@ class LLMProvider(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
-    id         = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    id         = Column(String, primary_key=True, default=_uuid)
     email      = Column(String, unique=True, nullable=False, index=True)
     name       = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -65,8 +65,8 @@ class User(Base):
 
 class Portfolio(Base):
     __tablename__ = "portfolios"
-    id         = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    user_id    = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    id         = Column(String, primary_key=True, default=_uuid)
+    user_id    = Column(String, ForeignKey("users.id"), nullable=False)
     name       = Column(String, nullable=False)
     universe   = Column(String, nullable=False, default="NASDAQ-100")
     benchmark  = Column(String, nullable=False, default="QQQ")
@@ -80,8 +80,8 @@ class Portfolio(Base):
 
 class Holding(Base):
     __tablename__ = "holdings"
-    id           = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    portfolio_id = Column(UUID(as_uuid=False), ForeignKey("portfolios.id"), nullable=False)
+    id           = Column(String, primary_key=True, default=_uuid)
+    portfolio_id = Column(String, ForeignKey("portfolios.id"), nullable=False)
     ticker       = Column(String(10), nullable=False, index=True)
     shares       = Column(Float, nullable=False)
     cost_basis   = Column(Float)
@@ -92,8 +92,8 @@ class Holding(Base):
 
 class Constraint(Base):
     __tablename__ = "constraints"
-    id               = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    portfolio_id     = Column(UUID(as_uuid=False), ForeignKey("portfolios.id"), nullable=False, unique=True)
+    id               = Column(String, primary_key=True, default=_uuid)
+    portfolio_id     = Column(String, ForeignKey("portfolios.id"), nullable=False, unique=True)
     max_position_pct = Column(Float, nullable=False, default=0.25)
     sector_cap_pct   = Column(Float, nullable=False, default=0.40)
     min_cash_pct     = Column(Float, nullable=False, default=0.02)
@@ -106,8 +106,8 @@ class Constraint(Base):
 
 class ScoreRun(Base):
     __tablename__ = "score_runs"
-    id            = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    portfolio_id  = Column(UUID(as_uuid=False), ForeignKey("portfolios.id"), nullable=False)
+    id            = Column(String, primary_key=True, default=_uuid)
+    portfolio_id  = Column(String, ForeignKey("portfolios.id"), nullable=False)
     run_date      = Column(DateTime, nullable=False)
     frequency     = Column(Enum(RebalanceFreq), nullable=False, default=RebalanceFreq.monthly)
     status        = Column(Enum(RunStatus), nullable=False, default=RunStatus.pending)
@@ -120,8 +120,8 @@ class ScoreRun(Base):
 
 class Score(Base):
     __tablename__ = "scores"
-    id                      = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    run_id                  = Column(UUID(as_uuid=False), ForeignKey("score_runs.id"), nullable=False)
+    id                      = Column(String, primary_key=True, default=_uuid)
+    run_id                  = Column(String, ForeignKey("score_runs.id"), nullable=False)
     ticker                  = Column(String(10), nullable=False, index=True)
     technical_ml_score      = Column(Float)
     fundamental_ml_score    = Column(Float)
@@ -144,9 +144,9 @@ class Score(Base):
 
 class OptimizationJob(Base):
     __tablename__ = "optimization_jobs"
-    id             = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    portfolio_id   = Column(UUID(as_uuid=False), ForeignKey("portfolios.id"), nullable=False)
-    run_id         = Column(UUID(as_uuid=False), ForeignKey("score_runs.id"))
+    id             = Column(String, primary_key=True, default=_uuid)
+    portfolio_id   = Column(String, ForeignKey("portfolios.id"), nullable=False)
+    run_id         = Column(String, ForeignKey("score_runs.id"))
     optimizer_type = Column(Enum(OptimizerType), nullable=False)
     status         = Column(Enum(RunStatus), nullable=False, default=RunStatus.pending)
     settings_json  = Column(JSONB)
@@ -156,9 +156,9 @@ class OptimizationJob(Base):
 
 class RebalanceProposal(Base):
     __tablename__ = "rebalance_proposals"
-    id                    = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    portfolio_id          = Column(UUID(as_uuid=False), ForeignKey("portfolios.id"), nullable=False)
-    optimization_job_id   = Column(UUID(as_uuid=False), ForeignKey("optimization_jobs.id"))
+    id                    = Column(String, primary_key=True, default=_uuid)
+    portfolio_id          = Column(String, ForeignKey("portfolios.id"), nullable=False)
+    optimization_job_id   = Column(String, ForeignKey("optimization_jobs.id"))
     status                = Column(String, nullable=False, default="pending")
     proposed_weights_json = Column(JSONB, nullable=False)
     rationale_json        = Column(JSONB)
@@ -171,8 +171,8 @@ class RebalanceProposal(Base):
 
 class RebalanceDecision(Base):
     __tablename__ = "rebalance_decisions"
-    id                    = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    proposal_id           = Column(UUID(as_uuid=False), ForeignKey("rebalance_proposals.id"), nullable=False)
+    id                    = Column(String, primary_key=True, default=_uuid)
+    proposal_id           = Column(String, ForeignKey("rebalance_proposals.id"), nullable=False)
     decision              = Column(Enum(DecisionType), nullable=False)
     modified_weights_json = Column(JSONB)
     reason                = Column(Text)
@@ -182,8 +182,8 @@ class RebalanceDecision(Base):
 
 class Trade(Base):
     __tablename__ = "trades"
-    id              = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    proposal_id     = Column(UUID(as_uuid=False), ForeignKey("rebalance_proposals.id"), nullable=False)
+    id              = Column(String, primary_key=True, default=_uuid)
+    proposal_id     = Column(String, ForeignKey("rebalance_proposals.id"), nullable=False)
     ticker          = Column(String(10), nullable=False)
     action          = Column(String(4), nullable=False)
     shares          = Column(Float)
@@ -196,7 +196,7 @@ class Trade(Base):
 class BenchmarkFact(Base):
     """Seed-only. Locked from Table 1, Cohen et al. (2025). Read-only at runtime."""
     __tablename__ = "benchmark_facts"
-    id                = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    id                = Column(String, primary_key=True, default=_uuid)
     strategy          = Column(Enum(StrategyType), nullable=False)
     frequency         = Column(Enum(RebalanceFreq), nullable=False)
     ml_weight         = Column(Float, nullable=False)

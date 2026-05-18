@@ -76,7 +76,7 @@ def _get_trades(proposal_id: str, db: Session) -> list[models.Trade]:
 @export_router.get("/trades/{proposal_id}")
 def export_trades(
     proposal_id: str,
-    format: str = Query("csv", regex="^(csv|ibkr|schwab|pdf)$"),
+    format: str = Query("csv", pattern="^(csv|ibkr|schwab|pdf)$"),
     db: Session = Depends(get_db),
 ):
     trades = _get_trades(proposal_id, db)

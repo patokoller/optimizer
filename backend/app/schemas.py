@@ -42,7 +42,7 @@ class ScoreRunOut(BaseModel):
     id: str; portfolio_id: str; run_date: datetime
     frequency: str; status: str; model_version: Optional[str] = None
     error_log: Optional[str] = None; created_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class ScoreOut(BaseModel):
