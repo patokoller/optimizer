@@ -44,12 +44,14 @@ export default function ScoringPage() {
     llmFallbackActive: s.llmFallbackActive,
   }));
 
-  const portfolioId = portfolio?.id ?? localStorage.getItem("portfolioId");
+  const [portfolioId, setPortfolioId] = useState<string | null>(null);
 
-  // Load latest scores on mount
+  // Resolve portfolioId client-side only (localStorage unavailable during SSR)
   useEffect(() => {
-    if (portfolioId) loadLatestScores(portfolioId);
-  }, [portfolioId]);
+    const id = portfolio?.id ?? (typeof window !== "undefined" ? localStorage.getItem("portfolioId") : null);
+    setPortfolioId(id);
+    if (id) loadLatestScores(id);
+  }, [portfolio?.id]);
 
   // Cleanup poll on unmount
   useEffect(() => () => { if (pollInterval) clearInterval(pollInterval); }, [pollInterval]);

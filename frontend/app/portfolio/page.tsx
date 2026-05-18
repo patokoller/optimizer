@@ -20,7 +20,7 @@ export default function PortfolioPage() {
 
   // Restore portfolio from previous session
   useEffect(() => {
-    const id = localStorage.getItem("portfolioId");
+    const id = typeof window !== "undefined" ? localStorage.getItem("portfolioId") : null;
     if (id) fetchPortfolio(id);
   }, []);
 
