@@ -74,14 +74,14 @@ class APIClient {
   async runScores(portfolioId: string, frequency: RebalanceFreq): Promise<{ jobId: string; runId: string }> {
     const { data } = await this.http.post<{ jobId: string; runId: string }>(
       "/api/scores/run",
-      { portfolioId, frequency }
+      { portfolio_id: portfolioId, frequency }
     );
     return data;
   }
 
   async getLatestScores(portfolioId: string): Promise<{ run: ScoreRun; scores: Score[] }> {
     const { data } = await this.http.get<{ run: ScoreRun; scores: Score[] }>(
-      `/api/scores/latest?portfolioId=${portfolioId}`
+      `/api/scores/latest?portfolio_id=${portfolioId}`
     );
     return data;
   }
@@ -95,7 +95,7 @@ class APIClient {
 
   async getScoreHistory(portfolioId: string): Promise<ScoreRun[]> {
     const { data } = await this.http.get<ScoreRun[]>(
-      `/api/scores/history?portfolioId=${portfolioId}`
+      `/api/scores/history?portfolio_id=${portfolioId}`
     );
     return data;
   }
@@ -107,8 +107,8 @@ class APIClient {
     settings: { riskAppetite: string; turnoverCap: number }
   ): Promise<{ jobId: string }> {
     const { data } = await this.http.post<{ jobId: string }>("/api/optimize/deep-rl", {
-      portfolioId,
-      runId,
+      portfolio_id: portfolioId,
+      run_id: runId,
       settings,
     });
     return data;
@@ -116,16 +116,16 @@ class APIClient {
 
   async optimizeMVO(portfolioId: string, runId: string): Promise<{ jobId: string }> {
     const { data } = await this.http.post<{ jobId: string }>("/api/optimize/mvo", {
-      portfolioId,
-      runId,
+      portfolio_id: portfolioId,
+      run_id: runId,
     });
     return data;
   }
 
   async optimizeHRP(portfolioId: string, runId: string): Promise<{ jobId: string }> {
     const { data } = await this.http.post<{ jobId: string }>("/api/optimize/hrp", {
-      portfolioId,
-      runId,
+      portfolio_id: portfolioId,
+      run_id: runId,
     });
     return data;
   }
@@ -141,8 +141,8 @@ class APIClient {
     optimizationJobId: string
   ): Promise<RebalanceProposal> {
     const { data } = await this.http.post<RebalanceProposal>("/api/rebalance/propose", {
-      portfolioId,
-      optimizationJobId,
+      portfolio_id: portfolioId,
+      optimization_job_id: optimizationJobId,
     });
     return data;
   }
@@ -171,7 +171,7 @@ class APIClient {
 
   async getRebalanceHistory(portfolioId: string): Promise<RebalanceProposal[]> {
     const { data } = await this.http.get<RebalanceProposal[]>(
-      `/api/rebalance/history?portfolioId=${portfolioId}`
+      `/api/rebalance/history?portfolio_id=${portfolioId}`
     );
     return data;
   }
@@ -184,10 +184,10 @@ class APIClient {
     endDate: string
   ): Promise<{ jobId: string }> {
     const { data } = await this.http.post<{ jobId: string }>("/api/backtest/run", {
-      portfolioId,
+      portfolio_id: portfolioId,
       strategies,
-      startDate,
-      endDate,
+      start_date: startDate,
+      end_date: endDate,
     });
     return data;
   }
