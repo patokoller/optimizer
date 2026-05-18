@@ -60,7 +60,8 @@ class AlpacaClient:
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
                 start=start,
                 end=end,
-                adjustment="all",  # adjusted for splits/dividends
+                adjustment="all",
+                feed="iex",   # IEX feed — available on free/paper accounts; SIP requires paid subscription
             )
             bars = self._client.get_stock_bars(req).df
             bars = bars.reset_index()
@@ -101,9 +102,14 @@ from datetime import datetime
 logger_av = logging.getLogger("alphavantage")
 
 
-class AlphaVantageError(Exception):
-    """Raised when Alpha Vantage API fails — blocks Fundamental strategy only."""
-    pass
+def _safe_float(val) -> float:
+    """Convert AV field to float — handles None, 'None', '', and missing."""
+    if val is None or val == "None" or val == "":
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 class AlphaVantageClient:
@@ -144,10 +150,10 @@ class AlphaVantageClient:
 
             rows = []
             for q in data["quarterlyReports"]:
-                revenue = float(q.get("totalRevenue") or 0)
-                op_income = float(q.get("operatingIncome") or 0)
-                net_income = float(q.get("netIncome") or 0)
-                op_margin = op_income / revenue if revenue else 0.0
+                revenue   = _safe_float(q.get("totalRevenue"))
+                op_income = _safe_float(q.get("operatingIncome"))
+                net_income = _safe_float(q.get("netIncome"))
+                op_margin  = op_income / revenue if revenue else 0.0
                 net_margin = net_income / revenue if revenue else 0.0
 
                 rows.append({
