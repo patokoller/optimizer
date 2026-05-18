@@ -5,7 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-  workflow_call:  # allows deploy.yml to call this as a reusable workflow
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -26,8 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          # No cache — package-lock.json doesn't exist until first npm install
 
       - name: Install deps
         run: npm install
@@ -36,11 +35,11 @@ jobs:
         run: npx tsc --noEmit || true
 
       - name: Lint
-        run: npx next lint --dir app --dir components || true
+        run: npx next lint --dir app --dir components --dir lib --dir store || true
 
-  # ── Backend: install + fidelity check ───────────────────────────────
+  # ── Backend: migrations + tests ──────────────────────────────────────
   backend-ci:
-    name: Backend — benchmark fidelity & unit tests
+    name: Backend — migrations & tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -74,7 +73,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install backend deps (CI subset — no heavy ML libs)
+      - name: Install backend deps
         run: |
           pip install \
             "fastapi==0.111.0" "uvicorn[standard]==0.30.1" \
