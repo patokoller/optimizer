@@ -1,33 +1,7 @@
-# railway.toml — AI Portfolio Decision-Support Platform
-# Phase 1–2 deployment on Railway
-#
-# Services required (create in Railway dashboard):
-#   1. Web (FastAPI)  — this file
-#   2. Worker (Celery) — set START_COMMAND override
-#   3. PostgreSQL plugin
-#   4. Redis plugin
-#
-# railway up --service web
-
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/health"
-healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
-
-[environments.production]
-  [environments.production.variables]
-    ANTHROPIC_API_KEY       = "@anthropic_api_key"
-    ALPACA_API_KEY          = "@alpaca_api_key"
-    ALPACA_SECRET_KEY       = "@alpaca_secret_key"
-    ALPHA_VANTAGE_API_KEY   = "@alpha_vantage_api_key"
-    EDGAR_USER_AGENT        = "ai-portfolio-platform research@alphalens.io"
-    # DATABASE_URL and REDIS_URL are auto-injected by Railway PostgreSQL + Redis plugins
-
-[environments.staging]
-  [environments.staging.variables]
-    EDGAR_USER_AGENT = "ai-portfolio-platform-staging research@alphalens.io"
