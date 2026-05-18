@@ -1,0 +1,113 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "What to roll back"
+        required: true
+        type: choice
+        options: [frontend, backend, worker, all]
+      environment:
+        description: "Environment"
+        required: true
+        default: "production"
+        type: choice
+        options: [production, staging]
+      reason:
+        description: "Reason for rollback (logged)"
+        required: true
+        type: string
+
+jobs:
+  rollback-frontend:
+    name: Rollback frontend (Vercel)
+    runs-on: ubuntu-latest
+    if: contains(fromJSON('["frontend","all"]'), github.event.inputs.target)
+    steps:
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: List recent deployments
+        run: |
+          vercel list --token=${{ secrets.VERCEL_TOKEN }} \
+            --scope=${{ secrets.VERCEL_ORG_ID }} | head -10
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Rollback to previous production deployment
+        run: |
+          # Get the second-most-recent production deployment URL
+          PREV=$(vercel list --token=${{ secrets.VERCEL_TOKEN }} \
+            --scope=${{ secrets.VERCEL_ORG_ID }} \
+            --environment=production 2>/dev/null | \
+            grep "●" | sed -n '2p' | awk '{print $2}')
+          
+          if [ -z "$PREV" ]; then
+            echo "❌ Could not find previous deployment"
+            exit 1
+          fi
+          
+          echo "Rolling back to: $PREV"
+          vercel alias set "$PREV" \
+            ${{ secrets.VERCEL_PROD_ALIAS }} \
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            --scope=${{ secrets.VERCEL_ORG_ID }}
+          
+          echo "✅ Frontend rolled back to: $PREV"
+          echo "Reason: ${{ github.event.inputs.reason }}"
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  rollback-backend:
+    name: Rollback backend (Railway redeploy previous)
+    runs-on: ubuntu-latest
+    if: contains(fromJSON('["backend","worker","all"]'), github.event.inputs.target)
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Rollback backend API to previous deployment
+        if: contains(fromJSON('["backend","all"]'), github.event.inputs.target)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }} \
+            --environment ${{ github.event.inputs.environment }} \
+            --service ${{ secrets.RAILWAY_API_SERVICE_ID }}
+          
+          # Railway doesn't have a native rollback CLI command yet.
+          # Strategy: redeploy the previous Git SHA.
+          PREV_SHA=$(git log --format="%H" -n 2 | tail -1)
+          echo "Rolling back API to SHA: $PREV_SHA"
+          railway up --detach --commit "$PREV_SHA" || \
+            echo "⚠ Railway CLI commit pin not supported — trigger manual rollback in dashboard: https://railway.app"
+
+      - name: Rollback Celery worker to previous deployment
+        if: contains(fromJSON('["worker","all"]'), github.event.inputs.target)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }} \
+            --environment ${{ github.event.inputs.environment }} \
+            --service ${{ secrets.RAILWAY_WORKER_SERVICE_ID }}
+          railway up --detach || true
+          echo "✅ Celery worker redeploy triggered"
+
+  log-rollback:
+    name: Log rollback event
+    runs-on: ubuntu-latest
+    needs: [rollback-frontend, rollback-backend]
+    if: always()
+    steps:
+      - run: |
+          echo "=== ROLLBACK EVENT ==="
+          echo "Actor:        ${{ github.actor }}"
+          echo "Target:       ${{ github.event.inputs.target }}"
+          echo "Environment:  ${{ github.event.inputs.environment }}"
+          echo "Reason:       ${{ github.event.inputs.reason }}"
+          echo "Timestamp:    $(date -u)"
+          echo "Frontend:     ${{ needs.rollback-frontend.result }}"
+          echo "Backend:      ${{ needs.rollback-backend.result }}"

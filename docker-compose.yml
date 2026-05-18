@@ -1,0 +1,120 @@
+version: "3.9"
+
+# ── AI Portfolio Decision-Support Platform — Local Dev Stack ──────────
+# Usage:
+#   docker compose up --build
+#   Frontend: http://localhost:3000
+#   Backend:  http://localhost:8000
+#   Celery:   background (no port)
+#   Redis:    localhost:6379
+#   Postgres: localhost:5432
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: portfolio_dev
+      POSTGRES_DB: portfolio_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio_db"]
+      interval: 5s
+      retries: 10
+
+  # ── Redis ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  # ── FastAPI backend ────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL:        postgresql://portfolio:portfolio_dev@postgres:5432/portfolio_db
+      REDIS_URL:           redis://redis:6379/0
+      ANTHROPIC_API_KEY:   ${ANTHROPIC_API_KEY:-}
+      ALPACA_API_KEY:      ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY:   ${ALPACA_SECRET_KEY:-}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+      EDGAR_USER_AGENT:    ${EDGAR_USER_AGENT:-ai-portfolio-platform research@alphalens.io}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+  # ── Celery worker ──────────────────────────────────────────────────
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: >
+      celery -A app.workers.tasks.celery_app worker
+      --loglevel=info
+      --concurrency=2
+      --queues=celery
+    environment:
+      DATABASE_URL:        postgresql://portfolio:portfolio_dev@postgres:5432/portfolio_db
+      REDIS_URL:           redis://redis:6379/0
+      ANTHROPIC_API_KEY:   ${ANTHROPIC_API_KEY:-}
+      ALPACA_API_KEY:      ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY:   ${ALPACA_SECRET_KEY:-}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+  # ── Celery Flower (monitoring UI) ─────────────────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: >
+      celery -A app.workers.tasks.celery_app flower
+      --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ── Next.js frontend ───────────────────────────────────────────────
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

@@ -1,0 +1,208 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design System Variables (exact spec values) ─────────────────── */
+:root {
+  --color-bg:       #0f1117;
+  --color-surface:  #1a1d27;
+  --color-surface2: #22253a;
+  --color-border:   #2d3148;
+  --color-text:     #e8eaf0;
+  --color-muted:    #8b90a7;
+  --color-primary:  #4f8ef7;
+  --color-success:  #3ecf8e;
+  --color-warning:  #f5a623;
+  --color-error:    #f05252;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Courier New", monospace;
+}
+
+/* ── Base Styles ──────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* ── Typography ───────────────────────────────────────────────────── */
+.font-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.text-financial {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ── Component Tokens ─────────────────────────────────────────────── */
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-lg;
+  }
+
+  .card-sm {
+    @apply card p-3;
+  }
+
+  .card-md {
+    @apply card p-4;
+  }
+
+  .card-lg {
+    @apply card p-5;
+  }
+
+  .input-base {
+    @apply w-full bg-surface2 border border-border rounded-md px-3 py-2
+           text-text text-sm placeholder-muted
+           focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary
+           transition-colors font-mono;
+  }
+
+  .btn-base {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
+           transition-all duration-150 cursor-pointer select-none;
+  }
+
+  .btn-primary {
+    @apply btn-base bg-primary text-white hover:bg-primary/90 active:scale-95;
+  }
+
+  .btn-default {
+    @apply btn-base bg-surface2 text-text border border-border hover:border-muted active:scale-95;
+  }
+
+  .btn-success {
+    @apply btn-base bg-success/10 text-success border border-success/30 hover:bg-success/20 active:scale-95;
+  }
+
+  .btn-danger {
+    @apply btn-base bg-error/10 text-error border border-error/30 hover:bg-error/20 active:scale-95;
+  }
+
+  .btn-ghost {
+    @apply btn-base text-muted hover:text-text hover:bg-surface2;
+  }
+
+  .tag {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-semibold
+           uppercase tracking-wide;
+  }
+
+  .score-pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold font-mono;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold text-text;
+  }
+
+  .label-sm {
+    @apply text-2xs font-semibold text-muted uppercase tracking-widest;
+  }
+
+  .table-header {
+    @apply label-sm py-2 px-3 text-left;
+  }
+
+  .table-cell {
+    @apply py-2.5 px-3 text-sm;
+  }
+
+  .divider {
+    @apply border-t border-border;
+  }
+
+  .kpi-value {
+    @apply text-xl font-bold text-financial;
+  }
+
+  .kpi-label {
+    @apply label-sm mb-1;
+  }
+}
+
+/* ── Chart Override ───────────────────────────────────────────────── */
+.recharts-default-tooltip {
+  background: var(--color-surface2) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 6px !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--color-text) !important;
+}
+
+/* ── Animations ───────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fadeIn 0.15s ease-out both;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+.data-table {
+  @apply w-full border-collapse text-sm;
+}
+
+.data-table thead tr {
+  @apply border-b border-border;
+}
+
+.data-table tbody tr {
+  @apply border-b border-border/30 hover:bg-surface2/50 transition-colors;
+}
+
+.data-table tbody tr:last-child {
+  @apply border-b-0;
+}
+
+/* ── Weight bar ───────────────────────────────────────────────────── */
+.weight-bar-track {
+  @apply h-1.5 bg-border rounded-full overflow-hidden;
+}
+
+.weight-bar-fill-ml {
+  @apply h-full bg-primary rounded-full transition-all;
+}
+
+.weight-bar-fill-llm {
+  @apply h-full bg-success rounded-full;
+}

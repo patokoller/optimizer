@@ -1,0 +1,74 @@
+# fly.toml — Phase 3 scaffold (Fly.io migration from Railway)
+# Used for long-running Celery workers and GPU-optional workloads.
+#
+# PHASE 3 MIGRATION CHECKLIST:
+#   1. fly auth login && fly launch (from this directory)
+#   2. fly postgres create --name portfolio-db
+#   3. fly redis create --name portfolio-redis
+#   4. fly secrets set ANTHROPIC_API_KEY=... ALPACA_API_KEY=...
+#   5. fly deploy
+#
+# For Celery worker (separate process group):
+#   fly machine run . --command "celery -A app.workers.tasks.celery_app worker --loglevel=info"
+
+app = "ai-portfolio-platform"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# ── Web service (FastAPI) ──────────────────────────────────────────────
+[[services]]
+  http_checks = []
+  internal_port = 8000
+  protocol = "tcp"
+  script_checks = []
+
+  [services.concurrency]
+    hard_limit = 25
+    soft_limit = 20
+    type = "connections"
+
+  [[services.ports]]
+    force_https = true
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    grace_period = "1s"
+    interval = "15s"
+    restart_limit = 0
+    timeout = "2s"
+
+  [[services.http_checks]]
+    interval = 10000
+    grace_period = "5s"
+    method = "get"
+    path = "/health"
+    protocol = "http"
+    timeout = 2000
+    tls_skip_verify = false
+
+# ── Worker (Celery) — separate process ────────────────────────────────
+[processes]
+  web    = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+  worker = "celery -A app.workers.tasks.celery_app worker --loglevel=info --concurrency=4"
+
+# ── Resources ──────────────────────────────────────────────────────────
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 2048
+
+# ── Secrets (set via fly secrets set KEY=VALUE) ────────────────────────
+# ANTHROPIC_API_KEY
+# ALPACA_API_KEY
+# ALPACA_SECRET_KEY
+# ALPHA_VANTAGE_API_KEY
+# DATABASE_URL      (injected by fly postgres attach)
+# REDIS_URL         (injected by fly redis attach)
+# EDGAR_USER_AGENT
