@@ -1,33 +1,41 @@
-// ═══════════════════════════════════════════════════════════
-// app/portfolio/page.tsx
-// ═══════════════════════════════════════════════════════════
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, CheckCircle, AlertTriangle } from "lucide-react";
-import { SectionHeader, Btn, KPI, Divider, Badge } from "@/components/ui";
+import { Upload, CheckCircle, RefreshCw } from "lucide-react";
+import { SectionHeader, Btn, EmptyState, Spinner } from "@/components/ui";
 import { useStore } from "@/store";
 import { api } from "@/lib/api-client";
-
-const DEMO_HOLDINGS = [
-  { ticker: "NVDA", shares: 50,  costBasis: 480.20, price: 892.35, weight: 0.22 },
-  { ticker: "MSFT", shares: 30,  costBasis: 340.10, price: 415.80, weight: 0.18 },
-  { ticker: "AAPL", shares: 80,  costBasis: 168.50, price: 195.40, weight: 0.14 },
-  { ticker: "META", shares: 25,  costBasis: 298.00, price: 518.70, weight: 0.12 },
-  { ticker: "GOOGL",shares: 60,  costBasis: 130.20, price: 182.30, weight: 0.11 },
-  { ticker: "AMZN", shares: 45,  costBasis: 142.80, price: 198.60, weight: 0.10 },
-  { ticker: "AVGO", shares: 15,  costBasis: 890.00, price: 1420.50,weight: 0.08 },
-  { ticker: "LLY",  shares: 20,  costBasis: 620.30, price: 795.40, weight: 0.05 },
-];
+import type { Portfolio } from "@/types";
 
 export default function PortfolioPage() {
-  const [uploaded, setUploaded] = useState(true);
-  const { isUploading, setUploading, addNotification } = useStore((s) => ({
-    isUploading: s.isUploading,
-    setUploading: s.setUploading,
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [loading, setLoading]     = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const { addNotification, setPortfolio: storeSet } = useStore((s) => ({
     addNotification: s.addNotification,
+    setPortfolio:    s.setPortfolio,
   }));
+
+  // Restore portfolio from previous session
+  useEffect(() => {
+    const id = localStorage.getItem("portfolioId");
+    if (id) fetchPortfolio(id);
+  }, []);
+
+  const fetchPortfolio = async (id: string) => {
+    setLoading(true);
+    try {
+      const p = await api.getPortfolio(id);
+      setPortfolio(p);
+      storeSet(p);
+    } catch {
+      localStorage.removeItem("portfolioId");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const onDrop = useCallback(async (files: File[]) => {
     if (!files[0]) return;
@@ -35,29 +43,37 @@ export default function PortfolioPage() {
     try {
       const fd = new FormData();
       fd.append("file", files[0]);
-      await api.uploadPortfolio(fd);
-      setUploaded(true);
-      addNotification({ type: "success", message: "Portfolio uploaded successfully." });
+      const p = await api.uploadPortfolio(fd);
+      setPortfolio(p);
+      storeSet(p);
+      localStorage.setItem("portfolioId", p.id);
+      addNotification({
+        type: "success",
+        message: `Portfolio uploaded — ${p.holdings.length} holdings saved to database.`,
+      });
     } catch (e: any) {
       addNotification({ type: "error", message: e.message ?? "Upload failed." });
     } finally {
       setUploading(false);
     }
-  }, [setUploading, addNotification]);
+  }, [addNotification, storeSet]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: { "text/csv": [".csv"] } });
-
-  const totalValue = DEMO_HOLDINGS.reduce((a, h) => a + h.shares * h.price, 0);
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: { "text/csv": [".csv"] },
+  });
 
   return (
     <div className="p-6 max-w-[1280px] space-y-5 animate-in">
       <div>
         <h1 className="text-xl font-bold text-text">Portfolio Setup</h1>
-        <p className="text-sm text-muted mt-1">Upload current holdings · Configure constraints · Set benchmark</p>
+        <p className="text-sm text-muted mt-1">
+          Upload current holdings · Data saved to Railway PostgreSQL
+        </p>
       </div>
 
       <div className="flex gap-5 flex-wrap">
-        {/* Left: upload + config */}
+        {/* Upload panel */}
         <div className="flex-1 min-w-[280px] space-y-4">
           <div className="card-lg">
             <SectionHeader title="Upload Holdings" sub="CSV: ticker, shares, cost_basis, currency" />
@@ -70,79 +86,94 @@ export default function PortfolioPage() {
               <Upload className="w-8 h-8 text-muted mx-auto mb-3" />
               <p className="text-sm text-text mb-1">Drop CSV here or click to browse</p>
               <p className="text-xs text-muted mb-3">ticker, shares, cost_basis, currency</p>
-              <Btn variant="primary" size="sm" loading={isUploading}>
-                {isUploading ? "Uploading…" : "Choose File"}
+              <Btn variant="primary" size="sm" loading={uploading}>
+                {uploading ? "Uploading…" : "Choose File"}
               </Btn>
             </div>
-            {uploaded && (
+
+            {portfolio && (
               <div className="flex items-center gap-2 mt-3 px-3 py-2 rounded bg-success/8 border border-success/20 text-xs text-success">
                 <CheckCircle className="w-3.5 h-3.5" />
-                Demo portfolio loaded (8 holdings) · May 18, 2026
+                {portfolio.holdings.length} holdings · ID: {portfolio.id.slice(0, 8)}…
               </div>
             )}
+
+            <div className="mt-4 p-3 rounded bg-surface2 border border-border text-xs space-y-1">
+              <p className="font-semibold text-text mb-2">CSV format:</p>
+              <code className="block text-primary">ticker,shares,cost_basis,currency</code>
+              <code className="block text-primary">NVDA,50,480.20,USD</code>
+              <code className="block text-primary">MSFT,30,340.10,USD</code>
+            </div>
           </div>
 
           <div className="card-lg space-y-3">
             <SectionHeader title="Configuration" />
-            {[["Universe", "NASDAQ-100"], ["Benchmark", "QQQ"], ["Rebalance Frequency", "Monthly"], ["Portfolio Size (Top-N)", "10 stocks"]].map(([k, v]) => (
-              <div key={k} className="flex justify-between text-sm">
-                <span className="text-muted">{k}</span>
-                <span className="font-medium text-text">{v}</span>
+            {[
+              ["Universe",            "NASDAQ-100"],
+              ["Benchmark",           "QQQ"],
+              ["Rebalance Frequency", "Monthly"],
+              ["Portfolio Size",      "Top 10 stocks"],
+              ["ML Weights",          "Locked from Table 1, Cohen et al. 2025"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex justify-between text-sm gap-4">
+                <span className="text-muted shrink-0">{k}</span>
+                <span className="font-medium text-text text-right">{v}</span>
               </div>
             ))}
           </div>
-
-          <div className="card-lg">
-            <SectionHeader title="Constraints" sub="Applied at next rebalance" />
-            <div className="grid grid-cols-2 gap-3">
-              {[["Max Position", "25%"], ["Sector Cap", "40%"], ["Min Cash", "2%"], ["Max Cash", "10%"]].map(([k, v]) => (
-                <div key={k} className="p-3 rounded bg-surface2 border border-border">
-                  <p className="text-2xs text-muted mb-1">{k}</p>
-                  <p className="font-mono text-base font-bold text-text">{v}</p>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
-        {/* Right: holdings table */}
+        {/* Live holdings table */}
         <div className="flex-[2] min-w-[380px]">
           <div className="card-lg">
-            <SectionHeader
-              title="Current Holdings"
-              sub={`Demo portfolio · Total value: $${totalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
-              action={<Badge color="#f5a623" size="xs">DEMO DATA</Badge>}
-            />
-            <div className="overflow-x-auto">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {["Ticker", "Shares", "Cost Basis", "Current Price", "Value", "Weight", "P&L"].map((h) => (
-                      <th key={h} className="table-header">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {DEMO_HOLDINGS.map((h) => {
-                    const value = h.shares * h.price;
-                    const pnl = ((h.price - h.costBasis) / h.costBasis) * 100;
-                    return (
-                      <tr key={h.ticker}>
-                        <td className="table-cell font-bold text-primary">{h.ticker}</td>
-                        <td className="table-cell font-mono text-xs">{h.shares}</td>
-                        <td className="table-cell font-mono text-xs text-muted">${h.costBasis.toFixed(2)}</td>
-                        <td className="table-cell font-mono text-xs">${h.price.toFixed(2)}</td>
-                        <td className="table-cell font-mono text-xs">${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}</td>
-                        <td className="table-cell font-mono text-xs font-semibold text-text">{(h.weight * 100).toFixed(1)}%</td>
-                        <td className="table-cell font-mono text-xs" style={{ color: pnl >= 0 ? "#3ecf8e" : "#f05252" }}>
-                          {pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}%
-                        </td>
+            {loading ? (
+              <div className="flex items-center justify-center py-16 gap-3">
+                <Spinner />
+                <span className="text-sm text-muted">Loading portfolio from database…</span>
+              </div>
+            ) : portfolio ? (
+              <>
+                <SectionHeader
+                  title="Holdings — Live from Database"
+                  sub={`${portfolio.holdings.length} positions · ${portfolio.universe} · ${portfolio.benchmark}`}
+                  action={
+                    <Btn size="sm" variant="ghost"
+                      icon={<RefreshCw className="w-3 h-3" />}
+                      onClick={() => fetchPortfolio(portfolio.id)}>
+                      Refresh
+                    </Btn>
+                  }
+                />
+                <div className="overflow-x-auto">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {["Ticker", "Shares", "Cost Basis", "Currency"].map((h) => (
+                          <th key={h} className="table-header">{h}</th>
+                        ))}
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {portfolio.holdings.map((h) => (
+                        <tr key={h.id}>
+                          <td className="table-cell font-bold text-primary">{h.ticker}</td>
+                          <td className="table-cell font-mono text-xs">{h.shares}</td>
+                          <td className="table-cell font-mono text-xs">
+                            {h.costBasis ? `$${h.costBasis.toFixed(2)}` : "—"}
+                          </td>
+                          <td className="table-cell text-muted text-xs">{h.currency}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                title="No portfolio loaded"
+                description="Upload a CSV to load your holdings. They will be saved to the database and restored on your next visit."
+              />
+            )}
           </div>
         </div>
       </div>
