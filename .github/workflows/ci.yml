@@ -88,18 +88,22 @@ jobs:
 
       - name: Run Alembic migrations
         env:
+          PYTHONPATH: .
           DATABASE_URL: postgresql://test:test@localhost:5432/test_portfolio
         run: alembic upgrade head
 
       - name: Benchmark fidelity tests (locked values guard)
+        env:
+          PYTHONPATH: .
         run: python tests/test_benchmark_fidelity.py
 
       - name: API integration tests
         env:
+          PYTHONPATH: .
           DATABASE_URL: postgresql://test:test@localhost:5432/test_portfolio
           REDIS_URL: redis://localhost:6379/0
           ANTHROPIC_API_KEY: "test-stub"
           ALPACA_API_KEY: ""
           ALPACA_SECRET_KEY: ""
           ALPHA_VANTAGE_API_KEY: ""
-        run: pytest tests/test_api.py -v --tb=short -x
+        run: python -m pytest tests/test_api.py -v --tb=short -x
