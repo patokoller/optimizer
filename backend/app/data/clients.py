@@ -236,54 +236,83 @@ class EDGARError(Exception):
     pass
 
 
+# Cache company_tickers.json to avoid refetching on every ticker
+_COMPANY_TICKERS_CACHE: dict = {}
+
+# Form types for US domestic companies
+US_FORM_TYPES = ["10-K", "10-Q", "8-K"]
+# Form types for foreign private issuers (BABA, NVO, JD, GGAL, NU, YPF etc.)
+FOREIGN_FORM_TYPES = ["20-F", "6-K", "40-F"]
+# All form types to try
+ALL_FORM_TYPES = US_FORM_TYPES + FOREIGN_FORM_TYPES
+
+# Tickers known to be ETFs/funds with no individual company filings
+ETF_TICKERS = {
+    "TLT", "SPY", "QQQ", "IWM", "VTI", "GLD", "SLV", "USO",
+    "QCLN", "IHI", "IBIT", "ETHA", "ARKK", "XLK", "XLF",
+}
+
+
 class EDGARClient:
     """
     SEC EDGAR filing fetcher.
-    Retrieves 10-K / 10-Q / 8-K text for Claude LLM context.
+    Retrieves 10-K / 10-Q / 20-F / 6-K text for Claude LLM context.
+    Handles both US domestic companies and foreign private issuers.
     """
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"})
 
-    def get_cik(self, ticker: str) -> str:
-        """Look up company CIK by ticker symbol."""
+    def _load_company_tickers(self) -> dict:
+        """Load and cache the SEC company tickers JSON (fetched once per process)."""
+        global _COMPANY_TICKERS_CACHE
+        if _COMPANY_TICKERS_CACHE:
+            return _COMPANY_TICKERS_CACHE
         try:
-            resp = self.session.get(
-                f"{EDGAR_BASE}/submissions/CIK.json",
-                params={"action": "getcompany", "company": ticker, "type": "", "dateb": "", "owner": "include", "count": "1", "search_text": ""},
-                timeout=10,
-            )
-            # Try the ticker lookup endpoint directly
-            resp2 = self.session.get(
-                "https://efts.sec.gov/LATEST/search-index?q=%22" + ticker + "%22&dateRange=custom&startdt=2023-01-01&enddt=2025-01-01&forms=10-K",
-                timeout=10,
-            )
-            # Simpler: use company tickers JSON
-            company_resp = requests.get(
+            resp = requests.get(
                 "https://www.sec.gov/files/company_tickers.json",
                 headers={"User-Agent": USER_AGENT},
-                timeout=10,
+                timeout=15,
             )
-            company_data = company_resp.json()
-            for key, val in company_data.items():
-                if val.get("ticker", "").upper() == ticker.upper():
-                    return str(val["cik_str"]).zfill(10)
-            raise EDGARError(f"CIK not found for {ticker}")
-        except EDGARError:
-            raise
+            resp.raise_for_status()
+            _COMPANY_TICKERS_CACHE = resp.json()
+            logger_edgar.info(f"Loaded {len(_COMPANY_TICKERS_CACHE)} company tickers from SEC")
         except Exception as e:
-            raise EDGARError(f"EDGAR CIK lookup failed for {ticker}: {e}") from e
+            logger_edgar.warning(f"Could not load company_tickers.json: {e}")
+        return _COMPANY_TICKERS_CACHE
+
+    def get_cik(self, ticker: str) -> str:
+        """
+        Look up company CIK by ticker symbol using SEC company_tickers.json.
+        Returns zero-padded 10-digit CIK string.
+        """
+        if ticker.upper() in ETF_TICKERS:
+            raise EDGARError(f"{ticker} is an ETF — no individual company filing on EDGAR")
+
+        company_data = self._load_company_tickers()
+        for val in company_data.values():
+            if val.get("ticker", "").upper() == ticker.upper():
+                return str(val["cik_str"]).zfill(10)
+
+        # Fallback: try BRK.B → BRK-B or strip suffix
+        clean = ticker.replace(".", "-").split("-")[0]
+        if clean != ticker:
+            for val in company_data.values():
+                if val.get("ticker", "").upper() == clean.upper():
+                    return str(val["cik_str"]).zfill(10)
+
+        raise EDGARError(f"CIK not found for {ticker}")
 
     def get_recent_filings(
         self,
         ticker: str,
-        form_types: list[str] = ["10-K", "10-Q", "8-K"],
-        n: int = 4,
+        n: int = 3,
     ) -> list[dict]:
         """
-        Get n most recent filings of the given types.
-        Returns list of {form_type, filing_date, description, text_url}.
+        Get n most recent filings for a ticker.
+        Tries US form types first (10-K, 10-Q, 8-K), then foreign types (20-F, 6-K).
+        Returns list of {form_type, filing_date, accession, text_url}.
         """
         try:
             cik = self.get_cik(ticker)
@@ -295,20 +324,25 @@ class EDGARClient:
             data = resp.json()
             filings = data.get("filings", {}).get("recent", {})
 
-            forms = filings.get("form", [])
-            dates = filings.get("filingDate", [])
+            forms      = filings.get("form", [])
+            dates      = filings.get("filingDate", [])
             accessions = filings.get("accessionNumber", [])
 
             results = []
+            # Try all form types (US + foreign) to maximize coverage
             for form, date, acc in zip(forms, dates, accessions):
-                if form in form_types and len(results) < n:
+                if form in ALL_FORM_TYPES and len(results) < n:
                     acc_clean = acc.replace("-", "")
+                    cik_int   = int(cik)
                     results.append({
-                        "form_type": form,
+                        "form_type":   form,
                         "filing_date": date,
-                        "accession": acc,
-                        "text_url": f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/{acc}-index.htm",
+                        "accession":   acc,
+                        "text_url":    f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_clean}/{acc}-index.htm",
                     })
+
+            if not results:
+                logger_edgar.warning(f"No filings found for {ticker} (CIK {cik}) in {ALL_FORM_TYPES}")
             return results
 
         except EDGARError:
@@ -343,32 +377,36 @@ class EDGARClient:
         max_chars: int = 150_000,
     ) -> str:
         """
-        Build LLM context string from most recent filings before rebalance_date.
-        Returns empty string on failure (caller uses w=1.0 fallback).
+        Build LLM context string from most recent available filings.
+        Accepts filings up to 2 years old to ensure coverage for all company types.
+        Returns empty string on failure (caller scores with w=1.0 fallback).
         """
         try:
-            filings = self.get_recent_filings(ticker)
-            # Filter to filings before rebalance_date
-            relevant = [
-                f for f in filings
-                if pd.to_datetime(f["filing_date"]) < pd.Timestamp(rebalance_date)
-            ][:3]
-
-            if not relevant:
-                logger_edgar.warning(f"No recent filings before {rebalance_date} for {ticker}")
+            filings = self.get_recent_filings(ticker, n=3)
+            if not filings:
                 return ""
+
+            # Accept filings within last 2 years — not strict exact timestamp
+            cutoff = pd.Timestamp(rebalance_date) - pd.DateOffset(years=2)
+            relevant = [f for f in filings if pd.to_datetime(f["filing_date"]) >= cutoff]
+
+            # Fall back to whatever exists if nothing in 2-year window
+            if not relevant:
+                relevant = filings[:2]
+                logger_edgar.info(f"Using older filings for {ticker}: {filings[0]['filing_date']}")
 
             sections = []
             per_filing_max = max_chars // max(1, len(relevant))
             for filing in relevant:
                 text = self.get_filing_text(filing["text_url"], max_chars=per_filing_max)
                 if text:
-                    sections.append(
-                        f"[{filing['form_type']} | {filing['filing_date']}]\n{text}"
-                    )
-                time.sleep(0.1)  # Rate limiting per EDGAR robots.txt
+                    sections.append(f"[{filing['form_type']} | {filing['filing_date']}]\n{text}")
+                time.sleep(0.1)
 
-            return "\n\n".join(sections)
+            result = "\n\n".join(sections)
+            if result:
+                logger_edgar.info(f"EDGAR: {ticker} — {len(relevant)} filing(s), {len(result)} chars")
+            return result
 
         except EDGARError as e:
             logger_edgar.warning(f"EDGAR unavailable for {ticker}: {e}")
