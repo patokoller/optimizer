@@ -142,23 +142,86 @@ export interface Score {
   ticker: string;
   companyName?: string;
   sector?: string;
+
+  // Individual model component scores
+  fundamentalRidgeScore?: number;
+  fundamentalXgbScore?: number;
+  fundamentalRfScore?: number;
+  fundamentalMlpScore?: number;
+  technicalXgbScore?: number;
+  technicalLgbmScore?: number;
+  technicalCatScore?: number;
+  entropyXgbScore?: number;
+  entropyLgbmScore?: number;
+  entropyCatScore?: number;
+
+  // Ensemble dispersion
+  fundamentalDispersion?: number;
+  technicalDispersion?: number;
+  entropyDispersion?: number;
+  overallDispersion?: number;
+
+  // Feature importances
+  fundamentalFeatureImportance?: Record<string, number>;
+  technicalFeatureImportance?: Record<string, number>;
+  entropyFeatureImportance?: Record<string, number>;
+
+  // Ensemble + LLM
   technicalMlScore?: number;
   fundamentalMlScore?: number;
   entropyMlScore?: number;
   llmScore?: number;
   llmProvider: LLMProvider;
   llmReasoningJson?: LLMReasoning;
+
+  // Combined strategy scores
   technicalScore?: number;
   fundamentalScore?: number;
   entropyScore?: number;
   combinedScore?: number;
+
+  // Weights
   wTechnical: number;
   wFundamental: number;
   wEntropy: number;
+
+  // Confidence metrics
+  confidenceScore?: number;
+  modelAgreement?: number;
+  llmMlAlignment?: number;
+
+  // Delta vs previous run
+  prevCombinedScore?: number;
+  scoreDelta?: number;
+  rankDelta?: number;
+  confidenceDelta?: number;
+
+  // Risk metrics
+  realisedVol21d?: number;
+  realisedVol63d?: number;
+  betaVsQqq?: number;
+  maxDrawdown1y?: number;
+  sharpe1y?: number;
+
   forwardReturnForecast?: number;
   createdAt: string;
   inPortfolio?: boolean;
   rank?: number;
+}
+
+export interface MarketRegime {
+  id: string;
+  runId: string;
+  regimeLabel: string;
+  regimeConfidence: number;
+  vix?: number;
+  yieldCurve10y2y?: number;
+  fedFundsRate?: number;
+  cpiYoy?: number;
+  dominantFactor?: string;
+  factorWeightAdj?: Record<string, number>;
+  transitionRisk?: string;
+  computedAt: string;
 }
 
 // ── Optimization types ────────────────────────────────────────────────

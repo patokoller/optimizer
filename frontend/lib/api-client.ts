@@ -93,11 +93,11 @@ class APIClient {
     return data;
   }
 
-  async getScoreHistory(portfolioId: string): Promise<ScoreRun[]> {
-    const { data } = await this.http.get<ScoreRun[]>(
-      `/api/scores/history?portfolio_id=${portfolioId}`
+  async getLatestRegime(portfolioId: string): Promise<import("@/types").MarketRegime> {
+    const { data } = await this.http.get(
+      `/api/scores/regime/latest?portfolio_id=${portfolioId}`
     );
-    return data;
+    return data as import("@/types").MarketRegime;
   }
 
   // ── Optimization ──────────────────────────────────────────────────
