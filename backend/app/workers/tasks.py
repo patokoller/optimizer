@@ -140,7 +140,23 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     warnings_list.append(f"LLM_SCORE_FAILED: {ticker} — Claude API unavailable")
                     break  # If Claude fails for one, assume it fails for all
 
-        # ── Step 6: ML model training + scoring ────────────────────
+        # ── Step 6: FRED macro snapshot + regime classification ───
+        from app.data.fred_client import FREDClient
+        from app.ml.regime import classify_regime, apply_regime_weight_adjustment
+        import numpy as np
+
+        macro_snapshot = {}
+        regime_data    = {"factor_weight_adj": {"technical": 1.0, "fundamental": 1.0, "entropy": 1.0}}
+        try:
+            fred = FREDClient()
+            macro_snapshot = fred.get_macro_snapshot()
+            regime_data    = classify_regime(macro_snapshot)
+            logger.info(f"Regime: {regime_data['label']} (confidence={regime_data['confidence']:.2f})")
+        except Exception as e:
+            logger.warning(f"FRED/Regime failed — neutral regime applied: {e}")
+            warnings_list.append(f"REGIME_UNAVAILABLE: {e}")
+
+        # ── Step 7: ML model training + scoring ────────────────────
         fund_scores = {}
         tech_scores = {}
         entr_scores = {}
@@ -151,13 +167,10 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
             try:
                 prices_df["date"] = pd.to_datetime(prices_df["date"])
                 fundamentals_df["period_date"] = pd.to_datetime(fundamentals_df["period_date"])
-
-                # Build lookup: ticker → sorted price series
                 price_lookup = {
-                    ticker: grp.sort_values("date").reset_index(drop=True)
-                    for ticker, grp in prices_df.groupby("ticker")
+                    t: grp.sort_values("date").reset_index(drop=True)
+                    for t, grp in prices_df.groupby("ticker")
                 }
-
                 def get_forward_return(ticker, report_date):
                     if ticker not in price_lookup:
                         return None
@@ -165,15 +178,13 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     after = grp[grp["date"] >= report_date]
                     if len(after) < 22:
                         return None
-                    start_price = after.iloc[0]["close"]
-                    end_price   = after.iloc[21]["close"]
-                    return (end_price / start_price) - 1 if start_price else None
-
+                    s = after.iloc[0]["close"]
+                    e = after.iloc[21]["close"]
+                    return (e / s) - 1 if s else None
                 fundamentals_df["forward_return"] = fundamentals_df.apply(
-                    lambda row: get_forward_return(row["ticker"], row["period_date"]), axis=1
+                    lambda r: get_forward_return(r["ticker"], r["period_date"]), axis=1
                 )
-                labeled = fundamentals_df["forward_return"].notna().sum()
-                logger.info(f"Forward returns attached: {labeled}/{len(fundamentals_df)} rows labeled")
+                logger.info(f"Forward returns attached: {fundamentals_df['forward_return'].notna().sum()}/{len(fundamentals_df)} rows labeled")
             except Exception as e:
                 logger.warning(f"Forward return computation failed: {e}")
 
@@ -182,6 +193,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 fund_model = FundamentalScorer()
                 fund_model.fit(fundamentals_df, rebalance_date)
                 fund_scores = fund_model.predict(tickers, fundamentals_df)
+                logger.info(f"Fundamental model scored {len(fund_scores)} tickers")
             except Exception as e:
                 logger.error(f"Fundamental model error: {e}")
                 warnings_list.append(f"FUNDAMENTAL_MODEL_ERROR: {e}")
@@ -195,56 +207,252 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 entr_model = EntropyScorer()
                 entr_model.fit(prices_df, rebalance_date)
                 entr_scores = entr_model.predict(tickers, prices_df, rebalance_date)
+                logger.info(f"Technical/Entropy models scored {len(tech_scores)} tickers")
             except Exception as e:
                 logger.error(f"Technical/Entropy model error: {e}")
                 warnings_list.append(f"TECHNICAL_MODEL_ERROR: {e}")
 
-        # ── Step 7: Write Score rows ───────────────────────────────
+        # ── Step 8: Compute risk metrics from price data ───────────
+        risk_metrics = {}
+        if prices_df is not None:
+            try:
+                prices_df["date"] = pd.to_datetime(prices_df["date"])
+                qqq_prices = prices_df[prices_df["ticker"] == "QQQ"].set_index("date")["close"] if "QQQ" in prices_df["ticker"].values else None
+
+                for ticker, grp in prices_df.groupby("ticker"):
+                    try:
+                        closes = grp.sort_values("date").set_index("date")["close"]
+                        daily_ret = closes.pct_change().dropna()
+
+                        vol_21d = float(daily_ret.tail(21).std() * (252**0.5)) if len(daily_ret) >= 21 else None
+                        vol_63d = float(daily_ret.tail(63).std() * (252**0.5)) if len(daily_ret) >= 63 else None
+
+                        # Max drawdown over 252 trading days
+                        tail = closes.tail(252)
+                        roll_max = tail.expanding().max()
+                        drawdowns = (tail - roll_max) / roll_max
+                        mdd = float(drawdowns.min()) if len(drawdowns) > 0 else None
+
+                        # Sharpe 1Y (annualised, risk-free ≈ 0)
+                        annual_ret = float(daily_ret.tail(252).mean() * 252) if len(daily_ret) >= 252 else None
+                        sharpe = float(annual_ret / vol_63d) if (annual_ret and vol_63d and vol_63d > 0) else None
+
+                        # Beta vs QQQ
+                        beta = None
+                        if qqq_prices is not None:
+                            qqq_ret = qqq_prices.pct_change().dropna()
+                            common = daily_ret.index.intersection(qqq_ret.index)
+                            if len(common) >= 60:
+                                cov = float(daily_ret[common].tail(252).cov(qqq_ret[common].tail(252)))
+                                var = float(qqq_ret[common].tail(252).var())
+                                beta = round(cov / var, 3) if var > 0 else None
+
+                        risk_metrics[ticker] = {
+                            "vol_21d": round(vol_21d, 4) if vol_21d else None,
+                            "vol_63d": round(vol_63d, 4) if vol_63d else None,
+                            "mdd":     round(mdd, 4)     if mdd else None,
+                            "sharpe":  round(sharpe, 3)  if sharpe else None,
+                            "beta":    beta,
+                        }
+                    except Exception:
+                        pass
+                logger.info(f"Risk metrics computed for {len(risk_metrics)} tickers")
+            except Exception as e:
+                logger.warning(f"Risk metric computation failed: {e}")
+
+        # ── Step 9: Fetch previous run scores for delta computation ─
+        prev_scores_map = {}
+        try:
+            prev_run = (
+                db.query(models.ScoreRun)
+                .filter(
+                    models.ScoreRun.portfolio_id == portfolio_id,
+                    models.ScoreRun.status.in_([models.RunStatus.complete, models.RunStatus.complete_with_warnings]),
+                    models.ScoreRun.id != run_id,
+                )
+                .order_by(models.ScoreRun.run_date.desc())
+                .first()
+            )
+            if prev_run:
+                prev_rows = db.query(models.Score).filter(models.Score.run_id == prev_run.id).all()
+                prev_scores_map = {s.ticker: s for s in prev_rows}
+                logger.info(f"Delta: comparing against run {prev_run.id[:8]} ({len(prev_scores_map)} prev scores)")
+        except Exception as e:
+            logger.warning(f"Delta computation skipped: {e}")
+
+        # ── Step 10: Compute universe percentile ranks ──────────────
+        all_combined = {}
+
+        # ── Step 11: Write Score rows ──────────────────────────────
         weights_m = {
-            "technical":   OPTIMAL_WEIGHTS.get(("technical",   frequency), {"ml": 1.0, "llm": 0.0}),
+            "technical":   OPTIMAL_WEIGHTS.get(("technical",   frequency), {"ml": 1.0,  "llm": 0.0}),
             "fundamental": OPTIMAL_WEIGHTS.get(("fundamental", frequency), {"ml": 0.15, "llm": 0.85}),
             "entropy":     OPTIMAL_WEIGHTS.get(("entropy",     frequency), {"ml": 0.70, "llm": 0.30}),
         }
 
+        # Apply regime weight adjustments
+        adj = regime_data.get("factor_weight_adj", {})
+        reg_weights = {
+            "technical":   {"ml": min(1.0, weights_m["technical"]["ml"]   * adj.get("technical",   1.0))},
+            "fundamental": {"ml": min(1.0, weights_m["fundamental"]["ml"] * adj.get("fundamental", 1.0))},
+            "entropy":     {"ml": min(1.0, weights_m["entropy"]["ml"]     * adj.get("entropy",     1.0))},
+        }
+
+        score_rows = []
         for ticker in tickers:
-            llm_data = llm_scores.get(ticker)
+            llm_data      = llm_scores.get(ticker)
             llm_score_val = llm_data["score"] if llm_data else None
-            llm_provider = models.LLMProvider.claude if llm_data else models.LLMProvider.none
-            llm_failed = llm_score_val is None
+            llm_provider  = models.LLMProvider.claude if llm_data else models.LLMProvider.none
+            llm_failed    = llm_score_val is None
 
-            tech_ml  = tech_scores.get(ticker)
-            fund_ml  = fund_scores.get(ticker)
-            entr_ml  = entr_scores.get(ticker)
+            # Extract component dicts from upgraded scorers
+            tech_d  = tech_scores.get(ticker) or {}
+            fund_d  = fund_scores.get(ticker) or {}
+            entr_d  = entr_scores.get(ticker) or {}
 
-            # Combined scores per strategy
-            tech_combined  = combined_score(tech_ml or 0.5,  llm_score_val, "technical",   frequency, llm_failed) if tech_ml  is not None else None
-            fund_combined  = combined_score(fund_ml or 0.5,  llm_score_val, "fundamental", frequency, llm_failed) if fund_ml  is not None else None
-            entr_combined  = combined_score(entr_ml or 0.5,  llm_score_val, "entropy",     frequency, llm_failed) if entr_ml  is not None else None
+            # Scalar ML scores (the ensemble-normalised value)
+            tech_ml = tech_d.get("score") if isinstance(tech_d, dict) else tech_d
+            fund_ml = fund_d.get("score") if isinstance(fund_d, dict) else fund_d
+            entr_ml = entr_d.get("score") if isinstance(entr_d, dict) else entr_d
 
-            # Overall combined = mean of available strategy scores
+            # Combined scores per strategy (regime-adjusted weights)
+            tech_combined = combined_score(tech_ml or 0.5, llm_score_val, "technical",   frequency, llm_failed) if tech_ml is not None else None
+            fund_combined = combined_score(fund_ml or 0.5, llm_score_val, "fundamental", frequency, llm_failed) if fund_ml is not None else None
+            entr_combined = combined_score(entr_ml or 0.5, llm_score_val, "entropy",     frequency, llm_failed) if entr_ml is not None else None
+
             avail = [s for s in [tech_combined, fund_combined, entr_combined] if s is not None]
             overall = float(sum(avail) / len(avail)) if avail else None
+            all_combined[ticker] = overall
+
+            # Dispersion — std dev across all available component scores
+            component_scores = [s for s in [
+                tech_d.get("xgboost"), tech_d.get("lightgbm"), tech_d.get("catboost"),
+                fund_d.get("ridge"),   fund_d.get("xgboost"),   fund_d.get("rf"), fund_d.get("mlp"),
+                entr_d.get("xgboost"), entr_d.get("lightgbm"), entr_d.get("catboost"),
+            ] if s is not None]
+            overall_dispersion = float(np.std(component_scores)) if len(component_scores) > 1 else 0.0
+
+            # Confidence score — inversely proportional to dispersion, boosted by regime
+            regime_conf_boost = regime_data.get("confidence", 0.7) - 0.7  # centre on 0
+            raw_confidence = max(0.0, min(1.0, 1.0 - (overall_dispersion * 3.0) + regime_conf_boost))
+
+            # LLM-ML alignment — does Claude's direction agree with overall ML?
+            llm_ml_align = None
+            if llm_score_val is not None and overall is not None:
+                ml_direction  = 1 if (tech_ml or 0.5) > 0.5 else -1
+                llm_direction = 1 if llm_score_val > 0.5 else -1
+                llm_ml_align  = 1.0 if ml_direction == llm_direction else 0.0
+
+            # Delta vs previous run
+            prev = prev_scores_map.get(ticker)
+            score_delta = None
+            prev_combined = None
+            if prev and prev.combined_score is not None and overall is not None:
+                prev_combined = prev.combined_score
+                score_delta   = round(overall - prev_combined, 4)
+
+            # Risk metrics
+            risk = risk_metrics.get(ticker, {})
 
             score_row = models.Score(
                 run_id                 = run_id,
                 ticker                 = ticker,
+                # Individual component scores
+                fundamental_ridge_score = fund_d.get("ridge"),
+                fundamental_xgb_score   = fund_d.get("xgboost"),
+                fundamental_rf_score    = fund_d.get("rf"),
+                fundamental_mlp_score   = fund_d.get("mlp"),
+                technical_xgb_score     = tech_d.get("xgboost"),
+                technical_lgbm_score    = tech_d.get("lightgbm"),
+                technical_cat_score     = tech_d.get("catboost"),
+                entropy_xgb_score       = entr_d.get("xgboost"),
+                entropy_lgbm_score      = entr_d.get("lightgbm"),
+                entropy_cat_score       = entr_d.get("catboost"),
+                # Dispersion
+                fundamental_dispersion  = fund_d.get("dispersion"),
+                technical_dispersion    = tech_d.get("dispersion"),
+                entropy_dispersion      = entr_d.get("dispersion"),
+                overall_dispersion      = overall_dispersion,
+                # Feature importances
+                fundamental_feature_importance = fund_d.get("feature_importance"),
+                technical_feature_importance   = tech_d.get("feature_importance"),
+                # Ensemble scores
                 technical_ml_score     = tech_ml,
                 fundamental_ml_score   = fund_ml,
                 entropy_ml_score       = entr_ml,
                 llm_score              = llm_score_val,
                 llm_provider           = llm_provider,
                 llm_reasoning_json     = llm_data,
+                # Combined
                 technical_score        = tech_combined,
                 fundamental_score      = fund_combined,
                 entropy_score          = entr_combined,
                 combined_score         = overall,
-                w_technical            = weights_m["technical"]["ml"],
-                w_fundamental          = weights_m["fundamental"]["ml"],
-                w_entropy              = weights_m["entropy"]["ml"],
+                # Weights
+                w_technical            = reg_weights["technical"]["ml"],
+                w_fundamental          = reg_weights["fundamental"]["ml"],
+                w_entropy              = reg_weights["entropy"]["ml"],
+                # Confidence
+                confidence_score       = round(raw_confidence, 3),
+                model_agreement        = round(1.0 - overall_dispersion, 3) if overall_dispersion is not None else None,
+                llm_ml_alignment       = llm_ml_align,
+                # Delta
+                prev_combined_score    = prev_combined,
+                score_delta            = score_delta,
+                # Risk
+                realised_vol_21d       = risk.get("vol_21d"),
+                realised_vol_63d       = risk.get("vol_63d"),
+                beta_vs_qqq            = risk.get("beta"),
+                max_drawdown_1y        = risk.get("mdd"),
+                sharpe_1y              = risk.get("sharpe"),
             )
             db.add(score_row)
+            score_rows.append((ticker, overall))
 
-        # ── Step 8: Update run status ──────────────────────────────
+        # ── Step 12: Compute rank deltas ───────────────────────────
+        # Rank by combined score descending; store rank_delta vs prev run
+        try:
+            sorted_tickers = sorted(
+                [(t, s) for t, s in all_combined.items() if s is not None],
+                key=lambda x: x[1], reverse=True
+            )
+            curr_ranks = {t: i + 1 for i, (t, _) in enumerate(sorted_tickers)}
+
+            if prev_scores_map:
+                prev_combined_scores = {t: s.combined_score for t, s in prev_scores_map.items() if s.combined_score}
+                sorted_prev = sorted(prev_combined_scores.items(), key=lambda x: x[1], reverse=True)
+                prev_ranks = {t: i + 1 for i, (t, _) in enumerate(sorted_prev)}
+
+                # Update rank_delta on already-added score rows
+                for score_obj in db.new:
+                    if hasattr(score_obj, "ticker") and score_obj.ticker in curr_ranks:
+                        curr_r = curr_ranks.get(score_obj.ticker)
+                        prev_r = prev_ranks.get(score_obj.ticker)
+                        if curr_r and prev_r:
+                            score_obj.rank_delta = prev_r - curr_r  # positive = improved rank
+        except Exception as e:
+            logger.warning(f"Rank delta computation failed: {e}")
+
+        # ── Step 13: Store market regime snapshot ──────────────────
+        try:
+            regime_row = models.MarketRegime(
+                run_id            = run_id,
+                regime_label      = regime_data.get("label", "Neutral / Mixed"),
+                regime_confidence = regime_data.get("confidence", 0.5),
+                vix               = macro_snapshot.get("vix"),
+                yield_curve_10y2y = macro_snapshot.get("yield_curve"),
+                fed_funds_rate    = macro_snapshot.get("fed_funds"),
+                cpi_yoy           = macro_snapshot.get("cpi_yoy"),
+                dominant_factor   = regime_data.get("dominant_factor"),
+                factor_weight_adj = regime_data.get("factor_weight_adj"),
+                transition_risk   = regime_data.get("transition_risk"),
+                raw_fred_json     = macro_snapshot,
+            )
+            db.add(regime_row)
+        except Exception as e:
+            logger.warning(f"Regime storage failed: {e}")
+
+        # ── Step 14: Update run status ─────────────────────────────
         run.status = (
             models.RunStatus.complete_with_warnings if warnings_list
             else models.RunStatus.complete

@@ -47,19 +47,84 @@ class ScoreRunOut(BaseModel):
 
 class ScoreOut(BaseModel):
     id: str; run_id: str; ticker: str
-    technical_ml_score: Optional[float] = None
+
+    # Individual model component scores
+    fundamental_ridge_score: Optional[float] = None
+    fundamental_xgb_score:   Optional[float] = None
+    fundamental_rf_score:    Optional[float] = None
+    fundamental_mlp_score:   Optional[float] = None
+    technical_xgb_score:     Optional[float] = None
+    technical_lgbm_score:    Optional[float] = None
+    technical_cat_score:     Optional[float] = None
+    entropy_xgb_score:       Optional[float] = None
+    entropy_lgbm_score:      Optional[float] = None
+    entropy_cat_score:       Optional[float] = None
+
+    # Ensemble dispersion (std dev of components — real confidence proxy)
+    fundamental_dispersion: Optional[float] = None
+    technical_dispersion:   Optional[float] = None
+    entropy_dispersion:     Optional[float] = None
+    overall_dispersion:     Optional[float] = None
+
+    # Feature importances
+    fundamental_feature_importance: Optional[dict[str, Any]] = None
+    technical_feature_importance:   Optional[dict[str, Any]] = None
+    entropy_feature_importance:     Optional[dict[str, Any]] = None
+
+    # Ensemble + LLM scores
+    technical_ml_score:   Optional[float] = None
     fundamental_ml_score: Optional[float] = None
-    entropy_ml_score: Optional[float] = None
-    llm_score: Optional[float] = None
-    llm_provider: str
-    llm_reasoning_json: Optional[dict[str, Any]] = None
-    technical_score: Optional[float] = None
+    entropy_ml_score:     Optional[float] = None
+    llm_score:            Optional[float] = None
+    llm_provider:         str
+    llm_reasoning_json:   Optional[dict[str, Any]] = None
+
+    # Combined strategy scores
+    technical_score:   Optional[float] = None
     fundamental_score: Optional[float] = None
-    entropy_score: Optional[float] = None
-    combined_score: Optional[float] = None
+    entropy_score:     Optional[float] = None
+    combined_score:    Optional[float] = None
+
+    # Locked ML weights
     w_technical: float; w_fundamental: float; w_entropy: float
+
+    # Confidence metrics
+    confidence_score:  Optional[float] = None
+    model_agreement:   Optional[float] = None
+    llm_ml_alignment:  Optional[float] = None
+
+    # Delta vs previous run
+    prev_combined_score: Optional[float] = None
+    score_delta:         Optional[float] = None
+    rank_delta:          Optional[int]   = None
+    confidence_delta:    Optional[float] = None
+
+    # Risk metrics
+    realised_vol_21d: Optional[float] = None
+    realised_vol_63d: Optional[float] = None
+    beta_vs_qqq:      Optional[float] = None
+    max_drawdown_1y:  Optional[float] = None
+    sharpe_1y:        Optional[float] = None
+
     forward_return_forecast: Optional[float] = None
     created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class RegimeOut(BaseModel):
+    """Market regime snapshot for the latest score run."""
+    id: str
+    run_id: str
+    regime_label: str
+    regime_confidence: float
+    vix: Optional[float] = None
+    yield_curve_10y2y: Optional[float] = None
+    fed_funds_rate: Optional[float] = None
+    cpi_yoy: Optional[float] = None
+    dominant_factor: Optional[str] = None
+    factor_weight_adj: Optional[dict[str, Any]] = None
+    transition_risk: Optional[str] = None
+    computed_at: datetime
     model_config = {"from_attributes": True}
 
 

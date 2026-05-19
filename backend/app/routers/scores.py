@@ -88,3 +88,35 @@ def get_score_run(run_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Score run not found")
     scores = db.query(models.Score).filter(models.Score.run_id == run_id).all()
     return {"run": run, "scores": scores}
+
+
+@router.get("/regime/latest", response_model=schemas.RegimeOut)
+def get_latest_regime(
+    portfolio_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Return the most recent market regime snapshot for a portfolio."""
+    run = (
+        db.query(models.ScoreRun)
+        .filter(
+            models.ScoreRun.portfolio_id == portfolio_id,
+            models.ScoreRun.status.in_([
+                models.RunStatus.complete,
+                models.RunStatus.complete_with_warnings,
+            ]),
+        )
+        .order_by(models.ScoreRun.run_date.desc())
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="No completed score run found")
+
+    regime = (
+        db.query(models.MarketRegime)
+        .filter(models.MarketRegime.run_id == run.id)
+        .first()
+    )
+    if not regime:
+        raise HTTPException(status_code=404, detail="No regime data for this run")
+
+    return regime

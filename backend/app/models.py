@@ -123,23 +123,92 @@ class Score(Base):
     id                      = Column(String, primary_key=True, default=_uuid)
     run_id                  = Column(String, ForeignKey("score_runs.id"), nullable=False)
     ticker                  = Column(String(10), nullable=False, index=True)
+
+    # Ensemble component scores (individual models — enables real dispersion)
+    fundamental_ridge_score = Column(Float)
+    fundamental_xgb_score   = Column(Float)
+    fundamental_rf_score    = Column(Float)
+    fundamental_mlp_score   = Column(Float)
+    technical_xgb_score     = Column(Float)
+    technical_lgbm_score    = Column(Float)
+    technical_cat_score     = Column(Float)
+    entropy_xgb_score       = Column(Float)
+    entropy_lgbm_score      = Column(Float)
+    entropy_cat_score       = Column(Float)
+
+    # Ensemble dispersion (std dev of component scores — real confidence proxy)
+    fundamental_dispersion  = Column(Float)
+    technical_dispersion    = Column(Float)
+    entropy_dispersion      = Column(Float)
+    overall_dispersion      = Column(Float)
+
+    # XGBoost feature importances per strategy (enables real factor attribution)
+    fundamental_feature_importance = Column(JSONB)  # {feature: importance}
+    technical_feature_importance   = Column(JSONB)
+    entropy_feature_importance     = Column(JSONB)
+
+    # LLM semantic score
     technical_ml_score      = Column(Float)
     fundamental_ml_score    = Column(Float)
     entropy_ml_score        = Column(Float)
     llm_score               = Column(Float)
     llm_provider            = Column(Enum(LLMProvider), nullable=False, default=LLMProvider.claude)
     llm_reasoning_json      = Column(JSONB)
+
+    # Combined scores
     technical_score         = Column(Float)
     fundamental_score       = Column(Float)
     entropy_score           = Column(Float)
     combined_score          = Column(Float)
+
+    # Locked ML weights (Table 1, Cohen et al. 2025)
     w_technical             = Column(Float, nullable=False, default=1.00)
     w_fundamental           = Column(Float, nullable=False, default=0.15)
     w_entropy               = Column(Float, nullable=False, default=0.70)
+
+    # Derived confidence metrics
+    confidence_score        = Column(Float)   # 0-1, higher = more confident
+    model_agreement         = Column(Float)   # 0-1, agreement across strategies
+    llm_ml_alignment        = Column(Float)   # 0-1, does LLM agree with ML direction
+
+    # Delta vs previous run (populated after second run)
+    prev_combined_score     = Column(Float)
+    score_delta             = Column(Float)
+    rank_delta              = Column(Integer)
+    confidence_delta        = Column(Float)
+
+    # Risk metrics computed from Alpaca price data
+    realised_vol_21d        = Column(Float)
+    realised_vol_63d        = Column(Float)
+    beta_vs_qqq             = Column(Float)
+    max_drawdown_1y         = Column(Float)
+    sharpe_1y               = Column(Float)
+
     forward_return_forecast = Column(Float)
     created_at              = Column(DateTime, default=datetime.utcnow, nullable=False)
     __table_args__          = (UniqueConstraint("run_id", "ticker"),)
     run = relationship("ScoreRun", back_populates="scores")
+
+
+class MarketRegime(Base):
+    """
+    Stores the market regime snapshot for each score run.
+    Computed from FRED macro data: VIX, yield curve, Fed funds, CPI.
+    """
+    __tablename__ = "market_regimes"
+    id                   = Column(String, primary_key=True, default=_uuid)
+    run_id               = Column(String, ForeignKey("score_runs.id"), nullable=False, unique=True)
+    regime_label         = Column(String, nullable=False)   # e.g. "Risk-On Momentum"
+    regime_confidence    = Column(Float, nullable=False)    # 0-1
+    vix                  = Column(Float)
+    yield_curve_10y2y    = Column(Float)
+    fed_funds_rate       = Column(Float)
+    cpi_yoy              = Column(Float)
+    dominant_factor      = Column(String)   # e.g. "Momentum", "Quality", "Defensive"
+    factor_weight_adj    = Column(JSONB)    # {"technical": 1.1, "fundamental": 0.9, ...}
+    transition_risk      = Column(String)   # "low" | "medium" | "high"
+    raw_fred_json        = Column(JSONB)
+    computed_at          = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class OptimizationJob(Base):

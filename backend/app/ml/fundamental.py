@@ -146,58 +146,111 @@ class FundamentalScorer:
         self,
         tickers: list[str],
         current_fundamentals: pd.DataFrame,
-    ) -> dict[str, float]:
+    ) -> dict[str, dict]:
         """
         Predict fundamental ML score for each ticker.
-        Returns normalized scores ∈ [0, 1].
+
+        Returns dict per ticker:
+        {
+            "score":        float,         # normalized ensemble [0,1]
+            "ridge":        float,         # raw Ridge prediction
+            "xgboost":      float,         # raw XGBoost prediction
+            "rf":           float,         # raw RF prediction
+            "mlp":          float,         # raw MLP prediction
+            "dispersion":   float,         # std dev of component predictions
+            "feature_importance": dict,    # {feature: importance} from XGBoost
+        }
         """
         if not self._trained:
             logger.warning("Fundamental model not trained — returning neutral 0.5")
-            return {t: 0.5 for t in tickers}
+            return {t: {"score": 0.5, "dispersion": 0.0, "feature_importance": {}} for t in tickers}
 
         df = current_fundamentals.copy()
         df = _add_growth_features(df)
         df = df[df["ticker"].isin(tickers)]
 
         if df.empty:
-            return {t: 0.5 for t in tickers}
+            return {t: {"score": 0.5, "dispersion": 0.0, "feature_importance": {}} for t in tickers}
 
-        results = {}
-        for _, row in df.iterrows():
+        # Extract XGBoost feature importances (once, not per ticker)
+        xgb_importances = {}
+        if "xgboost" in self.models:
+            try:
+                xgb_model = self.models["xgboost"]
+                # Handle Pipeline vs raw model
+                raw_xgb = xgb_model.named_steps.get("model", xgb_model) if hasattr(xgb_model, "named_steps") else xgb_model
+                if hasattr(raw_xgb, "feature_importances_"):
+                    imp = raw_xgb.feature_importances_
+                    xgb_importances = {f: round(float(v), 4) for f, v in zip(FEATURE_COLS, imp)}
+            except Exception as e:
+                logger.warning(f"Could not extract XGBoost importances: {e}")
+
+        raw_results = {}
+        for _, row in df.drop_duplicates(subset=["ticker"]).iterrows():
             ticker = row["ticker"]
             try:
                 x = np.array([[row.get(f, 0.0) for f in FEATURE_COLS]], dtype=float)
                 x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
                 x = np.clip(x, -1e12, 1e12)
-                preds = []
-                weights = []
+
+                component_preds = {}
                 for name, model in self.models.items():
-                    weight = MODEL_WEIGHTS.get(name, MODEL_WEIGHTS.get("rf", 0.25))
                     try:
                         pred = float(model.predict(x)[0])
-                        preds.append(pred * weight)
-                        weights.append(weight)
+                        component_preds[name] = pred
                     except Exception:
                         pass
-                if preds:
-                    results[ticker] = sum(preds) / sum(weights) if weights else 0.5
+
+                if component_preds:
+                    # Weighted ensemble
+                    weighted = sum(
+                        component_preds[n] * MODEL_WEIGHTS.get(n, 0.25)
+                        for n in component_preds
+                    )
+                    total_weight = sum(MODEL_WEIGHTS.get(n, 0.25) for n in component_preds)
+                    ensemble = weighted / total_weight if total_weight else 0.5
+
+                    # Dispersion = std dev of raw component predictions
+                    vals = list(component_preds.values())
+                    dispersion = float(np.std(vals)) if len(vals) > 1 else 0.0
+
+                    raw_results[ticker] = {
+                        "raw_ensemble": ensemble,
+                        "ridge":        component_preds.get("ridge"),
+                        "xgboost":      component_preds.get("xgboost"),
+                        "rf":           component_preds.get("rf"),
+                        "mlp":          component_preds.get("mlp"),
+                        "dispersion":   dispersion,
+                        "feature_importance": xgb_importances,
+                    }
                 else:
-                    results[ticker] = 0.5
+                    raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
+
             except Exception as e:
                 logger.error(f"Fundamental prediction error for {ticker}: {e}")
-                results[ticker] = 0.5
+                raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
 
-        # Normalize predictions to [0, 1]
-        if results:
-            vals = np.array(list(results.values()))
-            lo, hi = vals.min(), vals.max()
-            if hi > lo:
-                for k in results:
-                    results[k] = float((results[k] - lo) / (hi - lo))
+        # Normalize ensemble scores to [0, 1] across the universe
+        raw_vals = {t: v["raw_ensemble"] for t, v in raw_results.items()}
+        lo = min(raw_vals.values(), default=0)
+        hi = max(raw_vals.values(), default=1)
 
-        # Fill missing tickers with 0.5
-        for t in tickers:
-            if t not in results:
-                results[t] = 0.5
+        results = {}
+        for ticker in tickers:
+            if ticker not in raw_results:
+                results[ticker] = {"score": 0.5, "dispersion": 0.0, "feature_importance": {}}
+                continue
+            r = raw_results[ticker]
+            raw = r.get("raw_ensemble", 0.5)
+            norm = float((raw - lo) / (hi - lo)) if hi > lo else 0.5
+            results[ticker] = {
+                "score":              norm,
+                "ridge":              r.get("ridge"),
+                "xgboost":            r.get("xgboost"),
+                "rf":                 r.get("rf"),
+                "mlp":                r.get("mlp"),
+                "dispersion":         r.get("dispersion", 0.0),
+                "feature_importance": r.get("feature_importance", {}),
+            }
 
         return results
