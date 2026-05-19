@@ -1,4 +1,11 @@
-"""
+import warnings
+warnings.filterwarnings("ignore", message="Loky-backed parallel loops")
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+
+"""Celery tasks"""
+import warnings
+warnings.filterwarnings("ignore", message="Loky-backed parallel loops")
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 app/workers/tasks.py
 ─────────────────────────────────────────────────────────────────────────────
 Celery async tasks:
