@@ -108,7 +108,7 @@ class ScoreOut(BaseModel):
 
     forward_return_forecast: Optional[float] = None
     created_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class RegimeOut(BaseModel):
