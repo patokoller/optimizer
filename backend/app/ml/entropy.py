@@ -218,10 +218,13 @@ class EntropyScorer:
         tickers: list[str],
         prices_df: pd.DataFrame,
         rebalance_date: datetime,
-    ) -> dict[str, float]:
-        """Predict entropy score ∈ [0, 1] for each ticker."""
+    ) -> dict[str, dict]:
+        """
+        Predict entropy score for each ticker.
+        Returns dict per ticker with component scores and dispersion.
+        """
         if not self._trained:
-            return {t: 0.5 for t in tickers}
+            return {t: {"score": 0.5, "dispersion": 0.0, "feature_importance": {}} for t in tickers}
 
         df = build_entropy_features(prices_df)
         df["date"] = pd.to_datetime(df["date"])
@@ -230,26 +233,65 @@ class EntropyScorer:
         latest = latest[latest["ticker"].isin(tickers)]
         latest = latest.dropna(subset=FEATURE_COLS)
 
-        results = {}
+        # XGBoost feature importances
+        xgb_importances = {}
+        if "xgboost" in self.models:
+            try:
+                xgb_model = self.models["xgboost"]
+                if hasattr(xgb_model, "feature_importances_"):
+                    xgb_importances = {f: round(float(v), 4) for f, v in zip(FEATURE_COLS, xgb_model.feature_importances_)}
+            except Exception as e:
+                logger.warning(f"Entropy XGBoost importances unavailable: {e}")
+
+        raw_results = {}
         for _, row in latest.iterrows():
             ticker = row["ticker"]
             try:
                 x = self.scaler.transform(np.array([[row[f] for f in FEATURE_COLS]]))
-                preds = [float(m.predict(x)[0]) for m in self.models.values()]
-                results[ticker] = float(np.mean(preds)) if preds else 0.5
+                component_preds = {}
+                for name, model in self.models.items():
+                    try:
+                        component_preds[name] = float(model.predict(x)[0])
+                    except Exception:
+                        pass
+
+                if component_preds:
+                    ensemble = float(np.mean(list(component_preds.values())))
+                    dispersion = float(np.std(list(component_preds.values()))) if len(component_preds) > 1 else 0.0
+                    raw_results[ticker] = {
+                        "raw_ensemble": ensemble,
+                        "xgboost":      component_preds.get("xgboost"),
+                        "lightgbm":     component_preds.get("lightgbm"),
+                        "catboost":     component_preds.get("catboost"),
+                        "dispersion":   dispersion,
+                        "feature_importance": xgb_importances,
+                    }
+                else:
+                    raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
             except Exception as e:
                 logger.error(f"Entropy predict error {ticker}: {e}")
-                results[ticker] = 0.5
+                raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
 
-        # Normalize to [0, 1]
-        if results:
-            vals = np.array(list(results.values()))
-            lo, hi = vals.min(), vals.max()
-            if hi > lo:
-                for k in results:
-                    results[k] = float((results[k] - lo) / (hi - lo))
+        # Normalize ensemble to [0, 1]
+        raw_vals = {t: v["raw_ensemble"] for t, v in raw_results.items()}
+        lo = min(raw_vals.values(), default=0)
+        hi = max(raw_vals.values(), default=1)
 
-        for t in tickers:
-            if t not in results:
-                results[t] = 0.5
+        results = {}
+        for ticker in tickers:
+            if ticker not in raw_results:
+                results[ticker] = {"score": 0.5, "dispersion": 0.0, "feature_importance": {}}
+                continue
+            r = raw_results[ticker]
+            raw = r.get("raw_ensemble", 0.5)
+            norm = float((raw - lo) / (hi - lo)) if hi > lo else 0.5
+            results[ticker] = {
+                "score":              norm,
+                "xgboost":            r.get("xgboost"),
+                "lightgbm":           r.get("lightgbm"),
+                "catboost":           r.get("catboost"),
+                "dispersion":         r.get("dispersion", 0.0),
+                "feature_importance": r.get("feature_importance", {}),
+            }
+
         return results
