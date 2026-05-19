@@ -2,12 +2,8 @@ import warnings
 warnings.filterwarnings("ignore", message="Loky-backed parallel loops")
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
-"""Celery tasks"""
-import warnings
-warnings.filterwarnings("ignore", message="Loky-backed parallel loops")
-warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+"""
 app/workers/tasks.py
-─────────────────────────────────────────────────────────────────────────────
 Celery async tasks:
   - run_score_job     : runs all three strategy models + LLM scoring
   - run_optimization_job : runs deep_rl / mvo / hrp on completed scores
