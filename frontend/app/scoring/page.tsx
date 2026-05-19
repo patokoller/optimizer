@@ -161,7 +161,14 @@ export default function ScoringPage() {
     }),
     colHelper.accessor("wTechnical", {
       header: "ML Weight",
-      cell: (c) => <WeightBar mlWeight={c.getValue()} compact />,
+      cell: (c) => {
+        // Show the weight for the active strategy, not just technical
+        const row = c.row.original;
+        const w = strategy === "fundamental" ? row.wFundamental
+                : strategy === "entropy"     ? row.wEntropy
+                : row.wTechnical;
+        return <WeightBar mlWeight={w ?? row.wTechnical} compact />;
+      },
     }),
   ], []);
 

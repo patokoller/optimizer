@@ -142,6 +142,38 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         tech_scores = {}
         entr_scores = {}
 
+        # Compute forward returns from price data to use as training labels
+        import pandas as pd
+        if fundamentals_df is not None and prices_df is not None:
+            try:
+                # Build monthly forward return per ticker from price data
+                prices_df["date"] = pd.to_datetime(prices_df["date"])
+                monthly_returns = (
+                    prices_df.sort_values("date")
+                    .groupby("ticker")
+                    .apply(lambda g: g.set_index("date")["close"].resample("MS").last().pct_change(1).shift(-1))
+                    .reset_index()
+                    .rename(columns={"close": "forward_return", "date": "period_date"})
+                )
+                monthly_returns["period_date"] = pd.to_datetime(monthly_returns["period_date"])
+                fundamentals_df["period_date"] = pd.to_datetime(fundamentals_df["period_date"])
+
+                # Merge on ticker + nearest quarter
+                fundamentals_df = fundamentals_df.sort_values("period_date")
+                monthly_returns = monthly_returns.sort_values("period_date")
+                fundamentals_with_returns = pd.merge_asof(
+                    fundamentals_df,
+                    monthly_returns[["ticker", "period_date", "forward_return"]],
+                    on="period_date",
+                    by="ticker",
+                    direction="forward",
+                    tolerance=pd.Timedelta("95 days"),
+                )
+                fundamentals_df = fundamentals_with_returns
+                logger.info(f"Forward returns joined: {fundamentals_df['forward_return'].notna().sum()} labeled rows")
+            except Exception as e:
+                logger.warning(f"Forward return join failed — fundamental model will use neutral scores: {e}")
+
         if fundamentals_df is not None:
             try:
                 fund_model = FundamentalScorer()
