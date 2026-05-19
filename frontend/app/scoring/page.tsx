@@ -13,10 +13,10 @@ import {
 import { useStore } from "@/store";
 import { api } from "@/lib/api-client";
 import {
-  BENCHMARKS, OPTIMAL_WEIGHTS, STRATEGY_COLORS,
+  BENCHMARKS, OPTIMAL_WEIGHTS,
   type StrategyType, type Score, type MarketRegime,
 } from "@/types";
-import { SectionHeader, Btn, EmptyState, Spinner, DisclaimerBanner } from "@/components/ui";
+import { SectionHeader, Btn, EmptyState, Spinner, DisclaimerBanner, STRATEGY_COLORS } from "@/components/ui";
 
 // ── Micro-components ─────────────────────────────────────────────────────────
 
