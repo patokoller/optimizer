@@ -124,8 +124,13 @@ class FundamentalScorer:
             logger.warning(f"Insufficient training samples for fundamental model ({len(df)} rows)")
             return self
 
-        X = df[FEATURE_COLS].values
-        y = df["forward_return"].values
+        X = df[FEATURE_COLS].values.astype(float)
+        y = df["forward_return"].values.astype(float)
+
+        # Sanitize: replace inf, -inf, and NaN with 0 before scaling
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        # Clip extreme revenue values (in billions) to prevent scale issues
+        X = np.clip(X, -1e12, 1e12)
 
         for name, model in self.models.items():
             try:
@@ -161,7 +166,9 @@ class FundamentalScorer:
         for _, row in df.iterrows():
             ticker = row["ticker"]
             try:
-                x = np.array([[row.get(f, 0.0) for f in FEATURE_COLS]])
+                x = np.array([[row.get(f, 0.0) for f in FEATURE_COLS]], dtype=float)
+                x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+                x = np.clip(x, -1e12, 1e12)
                 preds = []
                 weights = []
                 for name, model in self.models.items():

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ import json
 import time
 import logging
 import requests
+import numpy as np
 import pandas as pd
 from datetime import datetime
 
@@ -155,11 +157,12 @@ class AlphaVantageClient:
 
             rows = []
             for q in data["quarterlyReports"]:
-                revenue   = _safe_float(q.get("totalRevenue"))
-                op_income = _safe_float(q.get("operatingIncome"))
+                revenue    = _safe_float(q.get("totalRevenue"))
+                op_income  = _safe_float(q.get("operatingIncome"))
                 net_income = _safe_float(q.get("netIncome"))
-                op_margin  = op_income / revenue if revenue else 0.0
-                net_margin = net_income / revenue if revenue else 0.0
+                # Guard against division by zero and clip extreme margin values
+                op_margin  = float(np.clip(op_income / revenue, -10, 10)) if revenue != 0 else 0.0
+                net_margin = float(np.clip(net_income / revenue, -10, 10)) if revenue != 0 else 0.0
 
                 rows.append({
                     "ticker": ticker,
@@ -217,6 +220,7 @@ import os
 import time
 import logging
 import requests
+import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
