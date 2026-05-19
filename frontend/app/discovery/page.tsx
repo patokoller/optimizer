@@ -639,14 +639,18 @@ export default function DiscoveryPage() {
                                   <div>
                                     <p className="text-2xs font-semibold text-muted uppercase tracking-wider mb-2">Risk</p>
                                     {[
-                                      ["Vol 21d", s.realisedVol21d, "%", 100],
-                                      ["Beta/QQQ", s.betaVsQqq, "x", null],
-                                      ["Sharpe 1Y", s.sharpe1y, "", null],
+                                      ["Vol 21d", s.realisedVol21d, "%", 100 as number | null],
+                                      ["Beta/QQQ", s.betaVsQqq, "x", null as number | null],
+                                      ["Sharpe 1Y", s.sharpe1y, "", null as number | null],
                                     ].map(([l, v, u, sc]) => (
                                       <div key={l as string} className="flex justify-between py-0.5 border-b border-border/30">
                                         <span className="text-xs text-muted">{l as string}</span>
                                         <span className="text-xs font-mono">
-                                          {v != null ? (sc ? `${((v as number)*sc).toFixed(1)}${u}` : `${(v as number).toFixed(3)}${u}`) : "—"}
+                                          {v != null
+                                            ? sc != null
+                                              ? `${((v as number) * (sc as number)).toFixed(1)}${u}`
+                                              : `${(v as number).toFixed(3)}${u}`
+                                            : "—"}
                                         </span>
                                       </div>
                                     ))}
