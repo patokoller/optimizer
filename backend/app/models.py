@@ -185,6 +185,10 @@ class Score(Base):
     sharpe_1y               = Column(Float)
 
     forward_return_forecast = Column(Float)
+    # ETF composite metadata
+    is_etf_composite     = Column(Boolean, default=False)
+    etf_type             = Column(String)   # "STOCK"|"EQUITY_ETF"|"BOND_ETF"|"CRYPTO_ETF"|"NON_SCOREABLE"
+    etf_holdings_used    = Column(JSONB)    # [{ticker, weight}] for EQUITY_ETF
     created_at              = Column(DateTime, default=datetime.utcnow, nullable=False)
     __table_args__          = (UniqueConstraint("run_id", "ticker"),)
     run = relationship("ScoreRun", back_populates="scores")

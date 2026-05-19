@@ -78,14 +78,65 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         if not portfolio:
             raise ValueError(f"Portfolio {portfolio_id} not found")
 
-        tickers = [h.ticker for h in portfolio.holdings]
-        if not tickers:
+        portfolio_tickers = [h.ticker for h in portfolio.holdings]
+        if not portfolio_tickers:
             raise ValueError("Portfolio has no holdings")
 
         rebalance_date = run.run_date
         training_start = rebalance_date - timedelta(days=730)  # 24 months
 
         warnings_list = []
+
+        # ── Step 1b: ETF classification ────────────────────────────
+        # Classify each ticker: STOCK | EQUITY_ETF | BOND_ETF | CRYPTO_ETF | NON_SCOREABLE
+        # For EQUITY_ETF: resolve top 5 equity holdings, score them, average back
+        from app.data.etf_client import ETFClient
+        etf_client = ETFClient()
+        classifications = etf_client.classify_batch(portfolio_tickers)
+
+        # Build the effective scoring universe:
+        # - STOCK/unknown → score directly
+        # - EQUITY_ETF → replace with top 5 holdings (deduplicated)
+        # - BOND_ETF / CRYPTO_ETF / NON_SCOREABLE → exclude entirely
+        score_tickers = []          # tickers actually run through the ML pipeline
+        etf_holding_map = {}        # etf_ticker → [ETFHolding] for composite averaging later
+        excluded_tickers = {}       # etf_ticker → reason string
+        ticker_normalisation = {}   # original → resolved (e.g. BRK.B → BRK-B)
+
+        for orig_ticker, clf in classifications.items():
+            resolved = clf.resolved_ticker
+            ticker_normalisation[orig_ticker] = resolved
+
+            if clf.etf_type == "STOCK":
+                if resolved not in score_tickers:
+                    score_tickers.append(resolved)
+
+            elif clf.etf_type == "EQUITY_ETF":
+                # Score the underlying holdings instead of the wrapper
+                etf_holding_map[orig_ticker] = clf.holdings
+                for h in clf.holdings:
+                    if h.ticker not in score_tickers:
+                        score_tickers.append(h.ticker)
+                logger.info(f"ETF {orig_ticker}: scoring via holdings {[h.ticker for h in clf.holdings]}")
+
+            elif clf.etf_type == "BOND_ETF":
+                excluded_tickers[orig_ticker] = "Bond ETF — excluded from equity scoring framework"
+                warnings_list.append(f"ETF_EXCLUDED: {orig_ticker} is a bond ETF — not scoreable in this framework")
+
+            elif clf.etf_type == "CRYPTO_ETF":
+                excluded_tickers[orig_ticker] = "Crypto ETF — excluded from equity scoring framework"
+                warnings_list.append(f"ETF_EXCLUDED: {orig_ticker} is a crypto ETF — not scoreable in this framework")
+
+            elif clf.etf_type == "NON_SCOREABLE":
+                excluded_tickers[orig_ticker] = clf.error or "Ticker not recognised / no data available"
+                warnings_list.append(f"TICKER_EXCLUDED: {orig_ticker} — {excluded_tickers[orig_ticker]}")
+
+        tickers = score_tickers  # pipeline now operates on this universe
+
+        if not tickers:
+            raise ValueError("No scoreable tickers after ETF classification — all holdings are bonds/crypto/unrecognised")
+
+        logger.info(f"ETF classification: {len(tickers)} scoreable tickers | {len(etf_holding_map)} ETF composites | {len(excluded_tickers)} excluded")
 
         # ── Step 2: Price data ─────────────────────────────────────
         alpaca = AlpacaClient()
@@ -127,7 +178,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 ctx = filing_contexts.get(ticker, "")
                 result = llm_scorer.score(
                     ticker=ticker,
-                    company_name=ticker,  # In production: resolve company name
+                    company_name=ticker,
                     frequency=frequency,
                     period=rebalance_date.strftime("%Y-%m"),
                     filing_context=ctx,
@@ -138,7 +189,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 else:
                     llm_failed_global = True
                     warnings_list.append(f"LLM_SCORE_FAILED: {ticker} — Claude API unavailable")
-                    break  # If Claude fails for one, assume it fails for all
+                    break
 
         # ── Step 6: FRED macro snapshot + regime classification ───
         from app.data.fred_client import FREDClient
@@ -405,9 +456,75 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 beta_vs_qqq            = risk.get("beta"),
                 max_drawdown_1y        = risk.get("mdd"),
                 sharpe_1y              = risk.get("sharpe"),
+                # ETF metadata
+                etf_type               = "STOCK",
+                is_etf_composite       = False,
             )
             db.add(score_row)
             score_rows.append((ticker, overall))
+
+        # ── Step 11b: Write ETF composite score rows ───────────────
+        # For each EQUITY_ETF, average the scores of its underlying holdings
+        for etf_ticker, holdings in etf_holding_map.items():
+            holding_tickers  = [h.ticker for h in holdings]
+            holding_weights  = [h.weight for h in holdings]
+            total_weight     = sum(holding_weights) or 1.0
+
+            # Weighted average of each score dimension
+            def wavg(getter):
+                vals = [(getter(t), w) for t, w in zip(holding_tickers, holding_weights) if getter(t) is not None]
+                if not vals:
+                    return None
+                return sum(v * w for v, w in vals) / sum(w for _, w in vals)
+
+            etf_tech  = wavg(lambda t: all_combined.get(t) if tech_scores.get(t) else None)
+            etf_fund  = wavg(lambda t: (fund_scores.get(t) or {}).get("score"))
+            etf_entr  = wavg(lambda t: (entr_scores.get(t) or {}).get("score"))
+            etf_llm   = wavg(lambda t: (llm_scores.get(t) or {}).get("score"))
+            etf_conf  = wavg(lambda t: next(
+                (s.confidence_score for s in db.new if hasattr(s, "ticker") and s.ticker == t and s.confidence_score is not None),
+                None
+            ))
+
+            # Overall combined = simple average of available strategy scores
+            avail_etf = [s for s in [etf_tech, etf_fund, etf_entr] if s is not None]
+            etf_overall = float(sum(avail_etf) / len(avail_etf)) if avail_etf else None
+            all_combined[etf_ticker] = etf_overall
+
+            etf_row = models.Score(
+                run_id                 = run_id,
+                ticker                 = etf_ticker,
+                technical_score        = etf_tech,
+                fundamental_score      = etf_fund,
+                entropy_score          = etf_entr,
+                llm_score              = etf_llm,
+                llm_provider           = models.LLMProvider.claude if etf_llm else models.LLMProvider.none,
+                combined_score         = etf_overall,
+                confidence_score       = etf_conf,
+                w_technical            = reg_weights["technical"]["ml"],
+                w_fundamental          = reg_weights["fundamental"]["ml"],
+                w_entropy              = reg_weights["entropy"]["ml"],
+                is_etf_composite       = True,
+                etf_type               = "EQUITY_ETF",
+                etf_holdings_used      = [{"ticker": h.ticker, "weight": h.weight, "description": h.description} for h in holdings],
+            )
+            db.add(etf_row)
+            logger.info(f"ETF composite {etf_ticker}: combined={etf_overall:.3f} (from {holding_tickers})")
+
+        # ── Step 11c: Write excluded ticker rows (no score, labelled) ─
+        for excl_ticker, reason in excluded_tickers.items():
+            etf_type = classifications[excl_ticker].etf_type if excl_ticker in classifications else "NON_SCOREABLE"
+            excl_row = models.Score(
+                run_id         = run_id,
+                ticker         = excl_ticker,
+                etf_type       = etf_type,
+                is_etf_composite = False,
+                llm_provider   = models.LLMProvider.none,
+                w_technical    = reg_weights["technical"]["ml"],
+                w_fundamental  = reg_weights["fundamental"]["ml"],
+                w_entropy      = reg_weights["entropy"]["ml"],
+            )
+            db.add(excl_row)
 
         # ── Step 12: Compute rank deltas ───────────────────────────
         # Rank by combined score descending; store rank_delta vs prev run

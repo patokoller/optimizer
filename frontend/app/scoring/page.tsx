@@ -251,6 +251,42 @@ function ExpandedPanel({ score }: { score: Score }) {
       <div className="space-y-3">
         <p className="label-sm text-muted uppercase tracking-wider">AI Analysis</p>
 
+        {/* ETF composite info */}
+        {score.isEtfComposite && score.etfHoldingsUsed && (
+          <div className="p-3 rounded bg-primary/8 border border-primary/20 mb-3">
+            <p className="text-xs font-semibold text-primary mb-2">ETF Composite Score</p>
+            <p className="text-2xs text-muted mb-2">
+              Scored via top {score.etfHoldingsUsed.length} equity holdings. Score = weighted average of underlying positions.
+            </p>
+            <div className="space-y-1">
+              {score.etfHoldingsUsed.map(h => (
+                <div key={h.ticker} className="flex justify-between text-2xs">
+                  <span className="font-mono text-primary">{h.ticker}</span>
+                  <span className="text-muted">{(h.weight * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bond/Crypto ETF explanation */}
+        {(score.etfType === "BOND_ETF" || score.etfType === "CRYPTO_ETF" || score.etfType === "NON_SCOREABLE") && (
+          <div className="p-3 rounded bg-surface2 border border-border">
+            <p className="text-xs font-semibold text-muted mb-1">
+              {score.etfType === "BOND_ETF" ? "Bond ETF — Not Scored" :
+               score.etfType === "CRYPTO_ETF" ? "Crypto ETF — Not Scored" :
+               "No Score Available"}
+            </p>
+            <p className="text-2xs text-muted">
+              {score.etfType === "BOND_ETF"
+                ? "Bond ETFs hold fixed-income instruments (Treasuries, corporate bonds) which cannot be scored through the paper's equity fundamental/technical/entropy framework."
+                : score.etfType === "CRYPTO_ETF"
+                ? "Crypto ETFs hold digital assets with no income statements or SEC filings. The paper's framework is not applicable."
+                : "This ticker was not recognised or has no available data in Alpha Vantage or EDGAR."}
+            </p>
+          </div>
+        )}
+
         {llm ? (
           <div className="space-y-3">
             <div className="flex items-center gap-2 mb-2">
@@ -446,9 +482,32 @@ export default function ScoringPage() {
     }),
     colHelper.accessor("ticker", {
       header: "Ticker",
-      cell: (c) => (
-        <span className="font-bold text-primary text-sm tracking-wide">{c.getValue()}</span>
-      ),
+      cell: (c) => {
+        const s = c.row.original;
+        const etfColor = s.etfType === "EQUITY_ETF" ? "#4f8ef7"
+          : s.etfType === "BOND_ETF" ? "#f5a623"
+          : s.etfType === "CRYPTO_ETF" ? "#a78bfa" : undefined;
+        return (
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-primary text-sm tracking-wide">{c.getValue()}</span>
+            {s.isEtfComposite && etfColor && (
+              <span className="text-2xs px-1 py-0.5 rounded font-semibold"
+                style={{ color: etfColor, background: `${etfColor}18` }}>
+                ETF composite
+              </span>
+            )}
+            {s.etfType === "BOND_ETF" && (
+              <span className="text-2xs px-1 py-0.5 rounded font-semibold text-warning bg-warning/10">Bond ETF</span>
+            )}
+            {s.etfType === "CRYPTO_ETF" && (
+              <span className="text-2xs px-1 py-0.5 rounded font-semibold" style={{ color: "#a78bfa", background: "#a78bfa18" }}>Crypto ETF</span>
+            )}
+            {s.etfType === "NON_SCOREABLE" && (
+              <span className="text-2xs px-1 py-0.5 rounded font-semibold text-muted bg-surface2">No data</span>
+            )}
+          </div>
+        );
+      },
     }),
     colHelper.accessor((r: any) => r._adjScore ?? r.combinedScore, {
       id: "combinedScore",

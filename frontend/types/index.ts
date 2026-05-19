@@ -207,6 +207,10 @@ export interface Score {
   createdAt: string;
   inPortfolio?: boolean;
   rank?: number;
+  // ETF composite
+  isEtfComposite?: boolean;
+  etfType?: "STOCK" | "EQUITY_ETF" | "BOND_ETF" | "CRYPTO_ETF" | "NON_SCOREABLE";
+  etfHoldingsUsed?: Array<{ ticker: string; weight: number; description: string }>;
 }
 
 export interface MarketRegime {
