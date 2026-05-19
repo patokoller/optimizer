@@ -148,9 +148,9 @@ class FREDClient:
 
         # Federal funds rate
         try:
-            result["fed_funds"] = self._fetch_latest_monthly("FEDFUNDS")
+            result["fed_funds"] = self._fetch_latest_monthly("DFF")
         except FREDError as e:
-            logger.warning(f"FRED FEDFUNDS: {e}")
+            logger.warning(f"FRED DFF: {e}")
             result["fed_funds"] = 5.0  # current-ish neutral
             errors.append(str(e))
 
