@@ -12,6 +12,7 @@ import {
   Settings,
   Circle,
   Activity,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { useStore } from "@/store";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { href: "/dashboard",  label: "Dashboard",       icon: LayoutDashboard },
   { href: "/portfolio",  label: "Portfolio",        icon: FolderOpen      },
   { href: "/scoring",    label: "Scoring Engine",   icon: BarChart3       },
+  { href: "/discovery",  label: "Discovery",        icon: Zap             },
   { href: "/rebalance",  label: "Rebalance",        icon: RefreshCw       },
   { href: "/backtest",   label: "Backtest",         icon: TrendingUp      },
   { href: "/export",     label: "Trade Export",     icon: Download        },

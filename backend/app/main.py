@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.database import engine, Base
 from app.routers import portfolio, scores, optimize, rebalance, backtest
 from app.routers.backtest import export_router
+from app.routers.discovery import router as discovery_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ app.include_router(optimize.router,   prefix="/api/optimize",   tags=["optimize"
 app.include_router(rebalance.router,  prefix="/api/rebalance",  tags=["rebalance"])
 app.include_router(backtest.router,   prefix="/api/backtest",   tags=["backtest"])
 app.include_router(export_router,     prefix="/api/export",     tags=["export"])
+app.include_router(discovery_router)
 
 
 @app.get("/health")

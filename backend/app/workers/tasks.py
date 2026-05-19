@@ -698,3 +698,294 @@ def run_optimization_job(
         raise self.retry(exc=e)
     finally:
         db.close()
+
+
+# ── Discovery Job ─────────────────────────────────────────────────────────────
+@celery_app.task(bind=True, max_retries=0)
+def run_discovery_job(self, discovery_run_id: str):
+    """
+    Score the full NASDAQ-100 universe through the complete 3-strategy + LLM pipeline.
+    Results stored in discovery_runs / discovery_scores — separate from portfolio scoring.
+    """
+    from datetime import timedelta
+    import numpy as np
+    from app.database import SessionLocal
+    from app import models
+    from app.ml.scoring import combined_score, normalize_scores, OPTIMAL_WEIGHTS
+    from app.ml.fundamental import FundamentalScorer
+    from app.ml.technical import TechnicalScorer
+    from app.ml.entropy import EntropyScorer
+    from app.ml.llm_scoring import LLMScorer
+    from app.data.clients import AlpacaClient, AlpacaDataError
+    from app.data.clients import AlphaVantageClient, AlphaVantageError
+    from app.data.clients import EDGARClient
+    from app.data.ndx100 import get_ndx100_tickers, get_sector
+    from app.data.etf_client import ETFClient
+
+    db = SessionLocal()
+    run = db.query(models.DiscoveryRun).filter(
+        models.DiscoveryRun.id == discovery_run_id
+    ).first()
+    if not run:
+        logger.error(f"DiscoveryRun {discovery_run_id} not found")
+        return
+
+    try:
+        run.status = models.RunStatus.running
+        db.commit()
+
+        tickers = get_ndx100_tickers()
+        run.universe_size = len(tickers)
+        db.commit()
+
+        rebalance_date = run.run_date
+        training_start = rebalance_date - timedelta(days=730)
+        frequency = "monthly"
+        warnings_list = []
+
+        # Filter out Alpaca-unsupported tickers
+        etf_client = ETFClient()
+        clean_tickers = [t for t in tickers if t not in etf_client._ALPACA_UNSUPPORTED]
+
+        # ── Price data ─────────────────────────────────────────────
+        alpaca = AlpacaClient()
+        prices_df = None
+        try:
+            prices_df = alpaca.get_ohlcv(clean_tickers, training_start, rebalance_date)
+            logger.info(f"Discovery Alpaca: {len(prices_df)} bars for {len(clean_tickers)} tickers")
+        except AlpacaDataError as e:
+            logger.warning(f"Discovery Alpaca failed: {e}")
+            warnings_list.append(f"ALPACA_UNAVAILABLE: {e}")
+
+        # ── Fundamental data ───────────────────────────────────────
+        av = AlphaVantageClient()
+        fundamentals_df = None
+        try:
+            fundamentals_df = av.get_fundamentals_batch(clean_tickers)
+            logger.info(f"Discovery AV: {len(fundamentals_df)} rows")
+        except AlphaVantageError as e:
+            logger.warning(f"Discovery AV failed: {e}")
+            warnings_list.append(f"ALPHAVANTAGE_UNAVAILABLE: {e}")
+
+        # ── Attach forward returns ─────────────────────────────────
+        import pandas as pd
+        if fundamentals_df is not None and prices_df is not None:
+            try:
+                prices_df["date"] = pd.to_datetime(prices_df["date"])
+                fundamentals_df["period_date"] = pd.to_datetime(fundamentals_df["period_date"])
+                price_lookup = {
+                    t: grp.sort_values("date").reset_index(drop=True)
+                    for t, grp in prices_df.groupby("ticker")
+                }
+                def get_fwd(ticker, report_date):
+                    if ticker not in price_lookup:
+                        return None
+                    grp = price_lookup[ticker]
+                    after = grp[grp["date"] >= report_date]
+                    if len(after) < 22:
+                        return None
+                    s = after.iloc[0]["close"]
+                    e = after.iloc[21]["close"]
+                    return (e / s) - 1 if s else None
+                fundamentals_df["forward_return"] = fundamentals_df.apply(
+                    lambda r: get_fwd(r["ticker"], r["period_date"]), axis=1
+                )
+            except Exception as e:
+                logger.warning(f"Discovery forward return failed: {e}")
+
+        # ── EDGAR filings ──────────────────────────────────────────
+        edgar = EDGARClient()
+        filing_contexts = {}
+        for ticker in clean_tickers:
+            ctx = edgar.get_filing_context(ticker, rebalance_date)
+            if ctx:
+                filing_contexts[ticker] = ctx
+
+        # ── Claude LLM scoring ─────────────────────────────────────
+        llm_scorer = LLMScorer()
+        llm_scores = {}
+        for ticker in clean_tickers:
+            ctx = filing_contexts.get(ticker, "")
+            result = llm_scorer.score(
+                ticker=ticker,
+                company_name=ticker,
+                frequency=frequency,
+                period=rebalance_date.strftime("%Y-%m"),
+                filing_context=ctx,
+                earnings_context="",
+            )
+            if result is not None:
+                llm_scores[ticker] = result
+
+        # ── Macro regime ───────────────────────────────────────────
+        from app.data.fred_client import FREDClient
+        from app.ml.regime import classify_regime
+        fred = FREDClient()
+        macro_snapshot = fred.get_macro_snapshot()
+        regime_data = classify_regime(macro_snapshot)
+        run.regime_label = regime_data.get("label", "Neutral / Mixed")
+        run.regime_confidence = regime_data.get("confidence", 0.5)
+        db.commit()
+
+        # ── ML scoring ─────────────────────────────────────────────
+        fund_scores, tech_scores, entr_scores = {}, {}, {}
+
+        if fundamentals_df is not None:
+            try:
+                fund_model = FundamentalScorer()
+                fund_model.fit(fundamentals_df, rebalance_date)
+                fund_scores = fund_model.predict(clean_tickers, fundamentals_df)
+            except Exception as e:
+                logger.error(f"Discovery fundamental model error: {e}")
+
+        if prices_df is not None:
+            try:
+                tech_model = TechnicalScorer()
+                tech_model.fit(prices_df, rebalance_date)
+                tech_scores = tech_model.predict(clean_tickers, prices_df, rebalance_date)
+                entr_model = EntropyScorer()
+                entr_model.fit(prices_df, rebalance_date)
+                entr_scores = entr_model.predict(clean_tickers, prices_df, rebalance_date)
+            except Exception as e:
+                logger.error(f"Discovery tech/entropy model error: {e}")
+
+        # ── Risk metrics ───────────────────────────────────────────
+        risk_metrics = {}
+        if prices_df is not None:
+            try:
+                from app.ml.risk import compute_risk_metrics
+                risk_metrics = compute_risk_metrics(prices_df, rebalance_date)
+            except Exception as e:
+                logger.warning(f"Discovery risk metrics failed: {e}")
+
+        # ── Previous run for deltas ────────────────────────────────
+        prev_run = (
+            db.query(models.DiscoveryRun)
+            .filter(
+                models.DiscoveryRun.status.in_([
+                    models.RunStatus.complete,
+                    models.RunStatus.complete_with_warnings,
+                ]),
+                models.DiscoveryRun.id != discovery_run_id,
+            )
+            .order_by(models.DiscoveryRun.run_date.desc())
+            .first()
+        )
+        prev_scores_map = {}
+        if prev_run:
+            prev_scores = db.query(models.DiscoveryScore).filter(
+                models.DiscoveryScore.discovery_run_id == prev_run.id
+            ).all()
+            prev_scores_map = {s.ticker: s for s in prev_scores}
+
+        # ── Optimal weights ────────────────────────────────────────
+        weights_m = {
+            "technical":   OPTIMAL_WEIGHTS.get(("technical",   frequency), {"ml": 1.0,  "llm": 0.0}),
+            "fundamental": OPTIMAL_WEIGHTS.get(("fundamental", frequency), {"ml": 0.15, "llm": 0.85}),
+            "entropy":     OPTIMAL_WEIGHTS.get(("entropy",     frequency), {"ml": 0.70, "llm": 0.30}),
+        }
+        adj = regime_data.get("factor_weight_adj", {})
+        reg_weights = {
+            s: {"ml": min(1.0, weights_m[s]["ml"] * adj.get(s, 1.0))}
+            for s in ["technical", "fundamental", "entropy"]
+        }
+
+        # ── Write discovery score rows ─────────────────────────────
+        all_scores = {}  # ticker → combined_score for ranking
+
+        for ticker in clean_tickers:
+            llm_data      = llm_scores.get(ticker)
+            llm_score_val = llm_data["score"] if llm_data else None
+            llm_failed    = llm_score_val is None
+            llm_provider  = models.LLMProvider.claude if llm_data else models.LLMProvider.none
+
+            tech_d = tech_scores.get(ticker) or {}
+            fund_d = fund_scores.get(ticker) or {}
+            entr_d = entr_scores.get(ticker) or {}
+
+            tech_ml = tech_d.get("score") if isinstance(tech_d, dict) else tech_d
+            fund_ml = fund_d.get("score") if isinstance(fund_d, dict) else fund_d
+            entr_ml = entr_d.get("score") if isinstance(entr_d, dict) else entr_d
+
+            tech_c = combined_score(tech_ml or 0.5, llm_score_val, "technical",   frequency, llm_failed) if tech_ml is not None else None
+            fund_c = combined_score(fund_ml or 0.5, llm_score_val, "fundamental", frequency, llm_failed) if fund_ml is not None else None
+            entr_c = combined_score(entr_ml or 0.5, llm_score_val, "entropy",     frequency, llm_failed) if entr_ml is not None else None
+
+            avail = [s for s in [tech_c, fund_c, entr_c] if s is not None]
+            overall = float(sum(avail) / len(avail)) if avail else None
+            all_scores[ticker] = overall
+
+            # Dispersion + confidence
+            comp_scores = [s for s in [
+                tech_d.get("xgboost"), tech_d.get("lightgbm"), tech_d.get("catboost"),
+                fund_d.get("ridge"),   fund_d.get("xgboost"),   fund_d.get("rf"), fund_d.get("mlp"),
+                entr_d.get("xgboost"), entr_d.get("lightgbm"), entr_d.get("catboost"),
+            ] if s is not None]
+            dispersion  = float(np.std(comp_scores)) if len(comp_scores) > 1 else 0.0
+            rc_boost    = regime_data.get("confidence", 0.7) - 0.7
+            confidence  = max(0.0, min(1.0, 1.0 - (dispersion * 3.0) + rc_boost))
+
+            # Delta
+            prev = prev_scores_map.get(ticker)
+            prev_combined = prev.combined_score if prev else None
+            score_delta   = round(overall - prev_combined, 4) if (overall is not None and prev_combined is not None) else None
+            prev_rank     = prev.rank if prev else None
+
+            risk = risk_metrics.get(ticker, {})
+
+            score_row = models.DiscoveryScore(
+                discovery_run_id  = discovery_run_id,
+                ticker            = ticker,
+                sector            = get_sector(ticker),
+                technical_score   = tech_c,
+                fundamental_score = fund_c,
+                entropy_score     = entr_c,
+                combined_score    = overall,
+                llm_score         = llm_score_val,
+                llm_provider      = llm_provider,
+                llm_reasoning_json = llm_data,
+                confidence_score  = round(confidence, 3),
+                overall_dispersion = dispersion,
+                prev_combined_score = prev_combined,
+                score_delta       = score_delta,
+                prev_rank         = prev_rank,
+                technical_feature_importance  = tech_d.get("feature_importance"),
+                fundamental_feature_importance = fund_d.get("feature_importance"),
+                realised_vol_21d  = risk.get("vol_21d"),
+                beta_vs_qqq       = risk.get("beta"),
+                sharpe_1y         = risk.get("sharpe"),
+            )
+            db.add(score_row)
+
+        db.flush()  # get IDs before ranking
+
+        # ── Compute and write ranks ────────────────────────────────
+        sorted_tickers = sorted(
+            [(t, s) for t, s in all_scores.items() if s is not None],
+            key=lambda x: x[1], reverse=True,
+        )
+        curr_ranks = {t: i + 1 for i, (t, _) in enumerate(sorted_tickers)}
+
+        for score_obj in db.new:
+            if isinstance(score_obj, models.DiscoveryScore):
+                ticker = score_obj.ticker
+                score_obj.rank = curr_ranks.get(ticker)
+                if score_obj.prev_rank is not None and score_obj.rank is not None:
+                    score_obj.rank_delta = score_obj.prev_rank - score_obj.rank
+
+        run.scored_count = len(clean_tickers)
+        run.status = (
+            models.RunStatus.complete_with_warnings if warnings_list
+            else models.RunStatus.complete
+        )
+        db.commit()
+        logger.info(f"Discovery run {discovery_run_id} complete — {len(clean_tickers)} tickers scored")
+
+    except Exception as e:
+        logger.error(f"Discovery run {discovery_run_id} failed: {e}", exc_info=True)
+        run.status = models.RunStatus.failed
+        run.error_log = str(e)
+        db.commit()
+        raise e
+    finally:
+        db.close()

@@ -281,3 +281,58 @@ class BenchmarkFact(Base):
     notes             = Column(Text)
     source            = Column(String, nullable=False, default="Table 1, Cohen et al., Entropy 2025, 27, 550")
     __table_args__    = (UniqueConstraint("strategy", "frequency"),)
+
+
+# ── Discovery (NASDAQ-100 universe scoring) ─────────────────────────────────
+
+class DiscoveryRun(Base):
+    """A full NASDAQ-100 universe scoring run, separate from portfolio scoring."""
+    __tablename__ = "discovery_runs"
+    id               = Column(String, primary_key=True, default=_uuid)
+    status           = Column(Enum(RunStatus), default=RunStatus.pending, nullable=False)
+    run_date         = Column(DateTime, default=datetime.utcnow, nullable=False)
+    universe         = Column(String, default="NASDAQ-100", nullable=False)
+    universe_size    = Column(Integer)
+    scored_count     = Column(Integer)
+    regime_label     = Column(String)
+    regime_confidence = Column(Float)
+    error_log        = Column(Text)
+    created_at       = Column(DateTime, default=datetime.utcnow, nullable=False)
+    scores           = relationship("DiscoveryScore", back_populates="run",
+                                    cascade="all, delete-orphan")
+
+
+class DiscoveryScore(Base):
+    """Score for a single NASDAQ-100 ticker within a discovery run."""
+    __tablename__ = "discovery_scores"
+    id                   = Column(String, primary_key=True, default=_uuid)
+    discovery_run_id     = Column(String, ForeignKey("discovery_runs.id"), nullable=False)
+    ticker               = Column(String(10), nullable=False)
+    sector               = Column(String)
+    # Strategy scores
+    technical_score      = Column(Float)
+    fundamental_score    = Column(Float)
+    entropy_score        = Column(Float)
+    combined_score       = Column(Float)
+    # LLM
+    llm_score            = Column(Float)
+    llm_provider         = Column(Enum(LLMProvider), default=LLMProvider.none)
+    llm_reasoning_json   = Column(JSONB)
+    # Confidence & dispersion
+    confidence_score     = Column(Float)
+    overall_dispersion   = Column(Float)
+    # Delta vs previous discovery run
+    prev_combined_score  = Column(Float)
+    score_delta          = Column(Float)
+    rank                 = Column(Integer)
+    prev_rank            = Column(Integer)
+    rank_delta           = Column(Integer)
+    # Feature importances
+    technical_feature_importance  = Column(JSONB)
+    fundamental_feature_importance = Column(JSONB)
+    # Risk metrics
+    realised_vol_21d     = Column(Float)
+    beta_vs_qqq          = Column(Float)
+    sharpe_1y            = Column(Float)
+    created_at           = Column(DateTime, default=datetime.utcnow, nullable=False)
+    run                  = relationship("DiscoveryRun", back_populates="scores")
