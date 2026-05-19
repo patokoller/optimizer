@@ -509,7 +509,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 etf_holdings_used      = [{"ticker": h.ticker, "weight": h.weight, "description": h.description} for h in holdings],
             )
             db.add(etf_row)
-            logger.info(f"ETF composite {etf_ticker}: combined={etf_overall:.3f if etf_overall is not None else 'N/A'} (from {holding_tickers})")
+            logger.info(f"ETF composite {etf_ticker}: combined={f'{etf_overall:.3f}' if etf_overall is not None else 'N/A'} (from {holding_tickers})")
 
         # ── Step 11c: Write excluded ticker rows (no score, labelled) ─
         for excl_ticker, reason in excluded_tickers.items():
@@ -584,7 +584,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         run.status = models.RunStatus.failed
         run.error_log = str(e)
         db.commit()
-        raise self.retry(exc=e)
+        raise e
     finally:
         db.close()
 
