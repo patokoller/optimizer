@@ -39,8 +39,10 @@ KNOWN_CRYPTO_ETFS = {
 
 # Tickers that simply don't exist as scoreable instruments
 NON_SCOREABLE = {
-    "JBCG",  # unrecognised / delisted
-    "STRV",  # unrecognised / delisted
+    "JBCG",   # unrecognised / delisted
+    "STRV",   # unrecognised / delisted
+    "BRK.B",  # Alpaca rejects BRK-B ticker format; crashes entire batch request
+    "BRK.A",  # same issue
 }
 
 # BRK.B fix: Berkshire Hathaway uses a non-standard ticker — map to scoreable form

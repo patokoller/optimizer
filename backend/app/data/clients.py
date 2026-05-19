@@ -40,6 +40,9 @@ class AlpacaClient:
         else:
             self._client = StockHistoricalDataClient(api_key=api_key, secret_key=secret)
 
+    # Tickers Alpaca's IEX feed cannot handle — filtered before the batch call
+    _ALPACA_UNSUPPORTED = {"BRK-B", "BRK-A", "BRK.B", "BRK.A", "BF-B", "BF.B"}
+
     def get_ohlcv(
         self,
         tickers: list[str],
@@ -55,9 +58,18 @@ class AlpacaClient:
         if self._client is None:
             raise AlpacaDataError("Alpaca client not initialized — check ALPACA_API_KEY + ALPACA_SECRET_KEY")
 
+        # Filter out tickers known to cause Alpaca 400 errors before the batch call
+        clean_tickers = [t for t in tickers if t not in self._ALPACA_UNSUPPORTED]
+        skipped = [t for t in tickers if t in self._ALPACA_UNSUPPORTED]
+        if skipped:
+            logger.warning(f"Alpaca: skipping unsupported tickers {skipped}")
+
+        if not clean_tickers:
+            raise AlpacaDataError("No valid tickers after filtering unsupported symbols")
+
         try:
             req = StockBarsRequest(
-                symbol_or_symbols=tickers,
+                symbol_or_symbols=clean_tickers,
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
                 start=start,
                 end=end,
