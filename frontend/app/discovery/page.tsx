@@ -385,10 +385,10 @@ export default function DiscoveryPage() {
 
   const loadLatest = async () => {
     try {
-      const data = await api.http.get("/api/discovery/latest");
-      setRun(data.data.run);
-      setScores(data.data.scores);
-      setRunStatus(data.data.run.status);
+      const data = await api.getLatestDiscovery();
+      setRun(data.run);
+      setScores(data.scores);
+      setRunStatus(data.run.status);
     } catch {}
   };
 
@@ -396,17 +396,17 @@ export default function DiscoveryPage() {
     setRunStatus("running");
     setScores([]);
     try {
-      const { data } = await api.http.post("/api/discovery/run");
-      const runId = data.run_id;
+      const data = await api.startDiscoveryRun();
+      const runId = data.runId;
       addNotification({ type: "info", message: "Discovery run started — scoring ~100 NASDAQ-100 tickers…" });
       pollRef.current = setInterval(async () => {
         try {
-          const { data: d } = await api.http.get(`/api/discovery/status/${runId}`);
+          const d = await api.getDiscoveryStatus(runId);
           setRunStatus(d.run.status);
           if (d.run.status === "complete" || d.run.status === "complete_with_warnings") {
             clearInterval(pollRef.current!);
             setRun(d.run);
-            setScores(d.scores);
+            setScores(d.scores ?? []);
             addNotification({ type: "success", message: `Discovery complete — ${d.run.scored_count} tickers scored` });
           } else if (d.run.status === "failed") {
             clearInterval(pollRef.current!);

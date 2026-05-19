@@ -100,6 +100,22 @@ class APIClient {
     return data as import("@/types").MarketRegime;
   }
 
+  // ── Discovery ────────────────────────────────────────────────────────────
+  async startDiscoveryRun(): Promise<{ runId: string; status: string }> {
+    const { data } = await this.http.post("/api/discovery/run");
+    return data;
+  }
+
+  async getLatestDiscovery(): Promise<{ run: any; scores: any[] }> {
+    const { data } = await this.http.get("/api/discovery/latest");
+    return data;
+  }
+
+  async getDiscoveryStatus(runId: string): Promise<{ run: any; scores: any[] }> {
+    const { data } = await this.http.get(`/api/discovery/status/${runId}`);
+    return data;
+  }
+
   // ── Optimization ──────────────────────────────────────────────────
   async optimizeDeepRL(
     portfolioId: string,
