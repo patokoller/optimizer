@@ -432,25 +432,84 @@ class AlphaVantageClient:
             logger_av.debug(f"Earnings history fetch failed {ticker}: {e}")
             return ""
 
+    def get_earnings_transcript(self, ticker: str, quarters: int = 2) -> str:
+        """
+        Fetch the most recent earnings call transcript(s) via AV EARNINGS_CALL_TRANSCRIPT.
+
+        Correct parameter format: quarter=2025Q1 (not year + quarter separately).
+        Returns a formatted string for Claude's earnings_context slot.
+        """
+        if not self.api_key:
+            return ""
+
+        texts = []
+        now = datetime.utcnow()
+        # Build quarter strings in format "2025Q1", "2024Q4", etc.
+        y, q = now.year, (now.month - 1) // 3 + 1
+        periods = []
+        for _ in range(quarters):
+            periods.append(f"{y}Q{q}")
+            q -= 1
+            if q == 0:
+                q = 4
+                y -= 1
+
+        for quarter_str in periods:
+            try:
+                resp = requests.get(
+                    self.BASE_URL,
+                    params={
+                        "function": "EARNINGS_CALL_TRANSCRIPT",
+                        "symbol":   ticker,
+                        "quarter":  quarter_str,
+                        "apikey":   self.api_key,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                if "Information" in data or "Note" in data:
+                    logger_av.debug(f"Transcript rate limit for {ticker} {quarter_str}")
+                    break
+
+                transcript = data.get("transcript", [])
+                if not transcript:
+                    continue
+
+                header = f"\n=== EARNINGS CALL {quarter_str} ===\n"
+                body = "\n".join(
+                    f"[{t.get('title', t.get('speaker', 'Speaker'))}] {t.get('content', '')}"
+                    for t in transcript
+                    if t.get("content")
+                )
+                if body:
+                    texts.append(header + body)
+                    logger_av.info(f"AV transcript: {ticker} {quarter_str} — {len(body):,} chars")
+
+                time.sleep(1.0)
+
+            except Exception as e:
+                logger_av.debug(f"Transcript fetch failed {ticker} {quarter_str}: {e}")
+                continue
+
+        if not texts:
+            return ""
+
+        return "\n\n".join(texts)
+
     def get_enriched_llm_context(
         self,
         ticker: str,
         delay_sec: float = 1.0,
     ) -> dict[str, str]:
         """
-        Fetch Phase A enrichment signals: news sentiment + earnings history.
-
-        NOTE: EARNINGS_CALL_TRANSCRIPT requires AV Premium plan above Plan 30.
-        Transcript fetch is disabled — returns empty string until plan is upgraded.
-        News and earnings history are available on Plan 30.
-
-        Returns dict with keys: transcript, news, earnings_history.
+        Fetch Phase A enrichment: earnings transcript, news sentiment, EPS history.
         Never raises — all failures return empty strings.
         """
-        # Transcript disabled — requires higher AV premium tier
-        transcript = ""
-
-        news = self.get_news_sentiment(ticker)
+        transcript       = self.get_earnings_transcript(ticker)
+        time.sleep(delay_sec)
+        news             = self.get_news_sentiment(ticker)
         time.sleep(delay_sec)
         earnings_history = self.get_earnings_history(ticker)
         time.sleep(delay_sec)
