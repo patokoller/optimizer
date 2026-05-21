@@ -67,12 +67,17 @@ async def upload_portfolio(
         except ValueError:
             raise HTTPException(status_code=422, detail=f"Invalid shares value for {ticker}")
 
+        # is_etf: read from CSV if present, default False
+        raw_etf = str(row.get("is_etf", "false")).strip().lower()
+        is_etf  = raw_etf in {"true", "1", "yes", "etf"}
+
         holding = models.Holding(
             portfolio_id=portfolio.id,
             ticker=ticker,
             shares=shares,
             cost_basis=float(row.get("cost_basis", 0) or 0),
             currency=row.get("currency", "USD").strip().upper(),
+            is_etf=is_etf,
         )
         db.add(holding)
         holdings.append(holding)
@@ -113,3 +118,22 @@ def update_constraints(
     c.esg_filter        = data.esg_filter
     db.commit()
     return {"status": "updated"}
+
+
+@router.patch("/{portfolio_id}/holdings/{holding_id}/etf")
+def toggle_etf(
+    portfolio_id: str,
+    holding_id: str,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """Toggle the is_etf flag on a single holding. Body: {"is_etf": true|false}"""
+    holding = db.query(models.Holding).filter(
+        models.Holding.id == holding_id,
+        models.Holding.portfolio_id == portfolio_id,
+    ).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    holding.is_etf = bool(data.get("is_etf", False))
+    db.commit()
+    return {"id": holding.id, "ticker": holding.ticker, "is_etf": holding.is_etf}

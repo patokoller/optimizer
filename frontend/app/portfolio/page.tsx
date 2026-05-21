@@ -100,9 +100,10 @@ export default function PortfolioPage() {
 
             <div className="mt-4 p-3 rounded bg-surface2 border border-border text-xs space-y-1">
               <p className="font-semibold text-text mb-2">CSV format:</p>
-              <code className="block text-primary">ticker,shares,cost_basis,currency</code>
-              <code className="block text-primary">NVDA,50,480.20,USD</code>
-              <code className="block text-primary">MSFT,30,340.10,USD</code>
+              <code className="block text-primary">ticker,shares,cost_basis,currency,is_etf</code>
+              <code className="block text-primary">NVDA,50,480.20,USD,false</code>
+              <code className="block text-primary">QCLN,20,45.10,USD,true</code>
+              <p className="text-muted mt-1">is_etf is optional — you can also toggle it per row after upload.</p>
             </div>
           </div>
 
@@ -148,7 +149,7 @@ export default function PortfolioPage() {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        {["Ticker", "Shares", "Cost Basis", "Currency"].map((h) => (
+                        {["Ticker", "Shares", "Cost Basis", "Currency", "ETF"].map((h) => (
                           <th key={h} className="table-header">{h}</th>
                         ))}
                       </tr>
@@ -162,10 +163,34 @@ export default function PortfolioPage() {
                             {h.costBasis ? `$${h.costBasis.toFixed(2)}` : "—"}
                           </td>
                           <td className="table-cell text-muted text-xs">{h.currency}</td>
+                          <td className="table-cell">
+                            <button
+                              onClick={async () => {
+                                const next = !h.isEtf;
+                                await api.toggleEtf(portfolio.id, h.id, next);
+                                setPortfolio(p => p ? {
+                                  ...p,
+                                  holdings: p.holdings.map(x =>
+                                    x.id === h.id ? { ...x, isEtf: next } : x
+                                  )
+                                } : p);
+                              }}
+                              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                                h.isEtf
+                                  ? "bg-primary/20 text-primary border border-primary/40"
+                                  : "bg-surface2 text-muted border border-border hover:border-primary/40"
+                              }`}
+                            >
+                              {h.isEtf ? "ETF ✓" : "Stock"}
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  <p className="text-xs text-muted mt-2 px-1">
+                    Mark any position as ETF to score its underlying holdings instead of the wrapper.
+                  </p>
                 </div>
               </>
             ) : (

@@ -86,6 +86,7 @@ class Holding(Base):
     shares       = Column(Float, nullable=False)
     cost_basis   = Column(Float)
     currency     = Column(String(3), nullable=False, default="USD")
+    is_etf       = Column(Boolean, nullable=False, default=False)  # user-set flag
     uploaded_at  = Column(DateTime, default=datetime.utcnow, nullable=False)
     portfolio    = relationship("Portfolio", back_populates="holdings")
 

@@ -94,6 +94,7 @@ export interface Holding {
   shares: number;
   costBasis?: number;
   currency: string;
+  isEtf: boolean;
   uploadedAt: string;
 }
 

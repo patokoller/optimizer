@@ -228,10 +228,22 @@ class ETFClient:
         results = {}
         for ticker in tickers:
             results[ticker] = self.classify(ticker)
-            # Only AV calls need rate limiting
             if results[ticker].etf_type == "EQUITY_ETF":
                 time.sleep(1.0)
         return results
+
+    def resolve_etf_holdings(self, ticker: str) -> list[ETFHolding]:
+        """
+        Fetch top-5 equity holdings for a user-confirmed ETF.
+        Called only when the user has explicitly flagged a holding as an ETF.
+        Returns [] if the API call fails or no equity holdings are found.
+        """
+        if not self.api_key:
+            return []
+        result = self._fetch_etf_profile(ticker, ticker)
+        if result is None or result.etf_type != "EQUITY_ETF":
+            return []
+        return result.holdings
 
 
 def _safe_pct(val) -> float:

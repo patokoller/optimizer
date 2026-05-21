@@ -66,6 +66,13 @@ class APIClient {
     return data;
   }
 
+  async toggleEtf(portfolioId: string, holdingId: string, isEtf: boolean): Promise<void> {
+    await this.http.patch(
+      `/api/portfolio/${portfolioId}/holdings/${holdingId}/etf`,
+      { is_etf: isEtf }
+    );
+  }
+
   async updateConstraints(id: string, constraints: PortfolioConstraints): Promise<void> {
     await this.http.put(`/api/portfolio/${id}/constraints`, constraints);
   }

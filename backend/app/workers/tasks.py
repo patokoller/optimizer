@@ -90,56 +90,53 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
 
         warnings_list = []
 
-        # ── Step 1b: ETF classification ────────────────────────────
-        # Classify each ticker: STOCK | EQUITY_ETF | BOND_ETF | CRYPTO_ETF | NON_SCOREABLE
-        # For EQUITY_ETF: resolve top 5 equity holdings, score them, average back
+        # ── Step 1b: ETF resolution — driven by user-set is_etf flag on holdings ──
+        # No auto-detection API calls. User explicitly marks ETFs in the portfolio UI.
+        # For ETF holdings: fetch top-5 constituents via AV ETF_PROFILE and score them.
+        # For regular stocks: score directly.
         from app.data.etf_client import ETFClient
         etf_client = ETFClient()
-        classifications = etf_client.classify_batch(portfolio_tickers)
 
-        # Build the effective scoring universe:
-        # - STOCK/unknown → score directly
-        # - EQUITY_ETF → replace with top 5 holdings (deduplicated)
-        # - BOND_ETF / CRYPTO_ETF / NON_SCOREABLE → exclude entirely
-        score_tickers = []          # tickers actually run through the ML pipeline
-        etf_holding_map = {}        # etf_ticker → [ETFHolding] for composite averaging later
-        excluded_tickers = {}       # etf_ticker → reason string
-        ticker_normalisation = {}   # original → resolved (e.g. BRK.B → BRK-B)
+        score_tickers  = []       # tickers run through ML pipeline
+        etf_holding_map = {}      # etf_ticker → [ETFHolding] for composite averaging
+        excluded_tickers = {}     # ticker → reason
+        ticker_normalisation = {} # identity map (kept for downstream compat)
 
-        for orig_ticker, clf in classifications.items():
-            resolved = clf.resolved_ticker
-            ticker_normalisation[orig_ticker] = resolved
+        # Load is_etf flags from the DB holdings
+        holding_etf_flags = {h.ticker: h.is_etf for h in portfolio.holdings}
 
-            if clf.etf_type == "STOCK":
-                if resolved not in score_tickers:
-                    score_tickers.append(resolved)
+        for ticker in portfolio_tickers:
+            ticker_normalisation[ticker] = ticker
+            if holding_etf_flags.get(ticker, False):
+                # User marked this as an ETF — resolve holdings via AV
+                try:
+                    holdings = etf_client.resolve_etf_holdings(ticker)
+                    if holdings:
+                        etf_holding_map[ticker] = holdings
+                        for h in holdings:
+                            if h.ticker not in score_tickers:
+                                score_tickers.append(h.ticker)
+                        logger.info(f"ETF {ticker}: scoring via holdings {[h.ticker for h in holdings]}")
+                    else:
+                        # ETF but no holdings resolved — score the ETF ticker directly
+                        logger.warning(f"ETF {ticker}: no holdings resolved, scoring directly")
+                        if ticker not in score_tickers:
+                            score_tickers.append(ticker)
+                except Exception as e:
+                    logger.warning(f"ETF {ticker}: holdings fetch failed ({e}), scoring directly")
+                    if ticker not in score_tickers:
+                        score_tickers.append(ticker)
+            else:
+                # Regular stock — score directly
+                if ticker not in score_tickers:
+                    score_tickers.append(ticker)
 
-            elif clf.etf_type == "EQUITY_ETF":
-                # Score the underlying holdings instead of the wrapper
-                etf_holding_map[orig_ticker] = clf.holdings
-                for h in clf.holdings:
-                    if h.ticker not in score_tickers:
-                        score_tickers.append(h.ticker)
-                logger.info(f"ETF {orig_ticker}: scoring via holdings {[h.ticker for h in clf.holdings]}")
-
-            elif clf.etf_type == "BOND_ETF":
-                excluded_tickers[orig_ticker] = "Bond ETF — excluded from equity scoring framework"
-                warnings_list.append(f"ETF_EXCLUDED: {orig_ticker} is a bond ETF — not scoreable in this framework")
-
-            elif clf.etf_type == "CRYPTO_ETF":
-                excluded_tickers[orig_ticker] = "Crypto ETF — excluded from equity scoring framework"
-                warnings_list.append(f"ETF_EXCLUDED: {orig_ticker} is a crypto ETF — not scoreable in this framework")
-
-            elif clf.etf_type == "NON_SCOREABLE":
-                excluded_tickers[orig_ticker] = clf.error or "Ticker not recognised / no data available"
-                warnings_list.append(f"TICKER_EXCLUDED: {orig_ticker} — {excluded_tickers[orig_ticker]}")
-
-        tickers = score_tickers  # pipeline now operates on this universe
+        tickers = score_tickers
 
         if not tickers:
-            raise ValueError("No scoreable tickers after ETF classification — all holdings are bonds/crypto/unrecognised")
+            raise ValueError("No scoreable tickers in portfolio")
 
-        logger.info(f"ETF classification: {len(tickers)} scoreable tickers | {len(etf_holding_map)} ETF composites | {len(excluded_tickers)} excluded")
+        logger.info(f"ETF resolution: {len(tickers)} scoreable tickers | {len(etf_holding_map)} ETF composites | {len(excluded_tickers)} excluded")
 
         # ── Step 2: Price data ─────────────────────────────────────
         alpaca = AlpacaClient()
