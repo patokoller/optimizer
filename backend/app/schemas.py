@@ -22,7 +22,8 @@ class PortfolioConstraintsUpdate(BaseModel):
 
 class HoldingOut(BaseModel):
     id: str; portfolio_id: str; ticker: str; shares: float
-    cost_basis: Optional[float] = None; currency: str; uploaded_at: datetime
+    cost_basis: Optional[float] = None; currency: str
+    is_etf: bool = False; uploaded_at: datetime
     model_config = {"from_attributes": True}
 
 
