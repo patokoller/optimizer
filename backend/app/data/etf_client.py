@@ -45,8 +45,13 @@ NON_SCOREABLE = {
     "BRK.A",  # same issue
 }
 
-# BRK.B fix: Berkshire Hathaway uses a non-standard ticker — map to scoreable form
-TICKER_NORMALISATION = {
+# Known equity ETFs — these get top-5 holdings resolution via ETF_PROFILE
+# Only add ETFs that are actually in user portfolios and need composite scoring
+KNOWN_EQUITY_ETFS = {
+    "QCLN", "IHI", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP",
+    "XLB", "XLU", "XLRE", "SMH", "SOXX", "QQQ", "SPY", "IWM", "VTI",
+    "ARKK", "ARKG", "ARKF", "ARKQ", "ARKW",
+}
     "BRK.B": "BRK-B",
     "BRK.A": "BRK-A",
     "BF.B":  "BF-B",
@@ -110,16 +115,23 @@ class ETFClient:
                 etf_type="CRYPTO_ETF",
             )
 
-        # Try ETF_PROFILE — determines if it's an ETF and what kind
-        if self.api_key:
-            try:
-                result = self._fetch_etf_profile(ticker, resolved)
-                if result is not None:
-                    return result
-            except Exception as e:
-                logger.warning(f"ETF_PROFILE failed for {ticker}: {e} — treating as STOCK")
+        # Fast-path: known equity ETF — fetch holdings via ETF_PROFILE
+        if ticker.upper() in KNOWN_EQUITY_ETFS:
+            if self.api_key:
+                try:
+                    result = self._fetch_etf_profile(ticker, resolved)
+                    if result is not None:
+                        return result
+                except Exception as e:
+                    logger.warning(f"ETF_PROFILE failed for {ticker}: {e} — treating as STOCK")
+            return TickerClassification(
+                original_ticker=ticker,
+                resolved_ticker=resolved,
+                etf_type="STOCK",
+            )
 
-        # Default: treat as individual stock
+        # Default: treat as individual stock — skip ETF_PROFILE API call entirely
+        # This avoids wasting AV rate-limit quota on obvious stocks (GOOGL, MSFT, etc.)
         return TickerClassification(
             original_ticker=ticker,
             resolved_ticker=resolved,
