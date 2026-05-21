@@ -142,58 +142,58 @@ class AlphaVantageClient:
     def get_income_statement(self, ticker: str) -> pd.DataFrame:
         """
         Fetch quarterly income statements for a single ticker.
-
-        Returns DataFrame with columns:
-            ticker, period_date, revenue, operating_income,
-            net_income, operating_margin, net_margin
+        Timeout: 30s with one retry on transient failures.
         """
         if not self.api_key:
             raise AlphaVantageError("Alpha Vantage API key not configured")
 
-        try:
-            resp = requests.get(
-                self.BASE_URL,
-                params={
-                    "function": "INCOME_STATEMENT",
-                    "symbol": ticker,
-                    "apikey": self.api_key,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        for attempt in range(2):
+            try:
+                resp = requests.get(
+                    self.BASE_URL,
+                    params={
+                        "function": "INCOME_STATEMENT",
+                        "symbol": ticker,
+                        "apikey": self.api_key,
+                    },
+                    timeout=30,  # increased from 15s
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            if "quarterlyReports" not in data:
-                error_msg = data.get("Note") or data.get("Information") or "Unknown error"
-                raise AlphaVantageError(f"Alpha Vantage error for {ticker}: {error_msg}")
+                if "quarterlyReports" not in data:
+                    error_msg = data.get("Note") or data.get("Information") or "Unknown error"
+                    raise AlphaVantageError(f"Alpha Vantage error for {ticker}: {error_msg}")
 
-            rows = []
-            for q in data["quarterlyReports"]:
-                revenue    = _safe_float(q.get("totalRevenue"))
-                op_income  = _safe_float(q.get("operatingIncome"))
-                net_income = _safe_float(q.get("netIncome"))
-                # Guard against division by zero and clip extreme margin values
-                op_margin  = float(np.clip(op_income / revenue, -10, 10)) if revenue != 0 else 0.0
-                net_margin = float(np.clip(net_income / revenue, -10, 10)) if revenue != 0 else 0.0
+                rows = []
+                for q in data["quarterlyReports"]:
+                    revenue    = _safe_float(q.get("totalRevenue"))
+                    op_income  = _safe_float(q.get("operatingIncome"))
+                    net_income = _safe_float(q.get("netIncome"))
+                    op_margin  = float(np.clip(op_income / revenue, -10, 10)) if revenue != 0 else 0.0
+                    net_margin = float(np.clip(net_income / revenue, -10, 10)) if revenue != 0 else 0.0
+                    rows.append({
+                        "ticker":           ticker,
+                        "period_date":      pd.to_datetime(q["fiscalDateEnding"]),
+                        "revenue":          revenue,
+                        "operating_income": op_income,
+                        "net_income":       net_income,
+                        "operating_margin": op_margin,
+                        "net_margin":       net_margin,
+                    })
 
-                rows.append({
-                    "ticker": ticker,
-                    "period_date": pd.to_datetime(q["fiscalDateEnding"]),
-                    "revenue": revenue,
-                    "operating_income": op_income,
-                    "net_income": net_income,
-                    "operating_margin": op_margin,
-                    "net_margin": net_margin,
-                })
+                df = pd.DataFrame(rows)
+                return df.sort_values("period_date")
 
-            df = pd.DataFrame(rows)
-            return df.sort_values("period_date")
-
-        except AlphaVantageError:
-            raise
-        except Exception as e:
-            logger_av.error(f"Alpha Vantage request failed for {ticker}: {e}", exc_info=True)
-            raise AlphaVantageError(f"Alpha Vantage fetch failed: {e}") from e
+            except AlphaVantageError:
+                raise
+            except Exception as e:
+                if attempt == 0:
+                    logger_av.warning(f"AV timeout for {ticker}, retrying in 5s: {e}")
+                    time.sleep(5)
+                    continue
+                logger_av.error(f"Alpha Vantage request failed for {ticker}: {e}", exc_info=True)
+                raise AlphaVantageError(f"Alpha Vantage fetch failed: {e}") from e
 
     def get_fundamentals_batch(
         self,
