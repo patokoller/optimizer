@@ -745,7 +745,9 @@ def run_discovery_job(self, discovery_run_id: str):
 
         # Filter out Alpaca-unsupported tickers
         etf_client = ETFClient()
-        clean_tickers = [t for t in tickers if t not in etf_client._ALPACA_UNSUPPORTED]
+        # Filter out tickers known to crash Alpaca's batch request
+        from app.data.clients import AlpacaClient as _AC
+        clean_tickers = [t for t in tickers if t not in _AC._ALPACA_UNSUPPORTED]
 
         # ── Price data ─────────────────────────────────────────────
         alpaca = AlpacaClient()
