@@ -170,19 +170,37 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
             warnings_list.append("EDGAR_UNAVAILABLE: No filing context — all strategies fall back to w=1.0")
             llm_failed_global = True
 
+        # ── Step 4b: Phase A enrichment — transcript, news, earnings history ──
+        # Per-ticker, non-blocking. Failures return empty strings, never crash the run.
+        enriched_contexts = {}
+        try:
+            for ticker in tickers:
+                ctx_data = av.get_enriched_llm_context(ticker)
+                enriched_contexts[ticker] = ctx_data
+                if any(ctx_data.values()):
+                    logger.info(
+                        f"Enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, "
+                        f"news={bool(ctx_data['news'])}, earnings={bool(ctx_data['earnings_history'])}"
+                    )
+        except Exception as e:
+            logger.warning(f"Enrichment fetch failed (non-blocking): {e}")
+
         # ── Step 5: Claude LLM scoring ─────────────────────────────
         llm_scorer = LLMScorer()
         llm_scores = {}
         if not llm_failed_global:
             for ticker in tickers:
-                ctx = filing_contexts.get(ticker, "")
+                ctx      = filing_contexts.get(ticker, "")
+                enriched = enriched_contexts.get(ticker, {})
                 result = llm_scorer.score(
                     ticker=ticker,
                     company_name=ticker,
                     frequency=frequency,
                     period=rebalance_date.strftime("%Y-%m"),
                     filing_context=ctx,
-                    earnings_context="",
+                    earnings_context=enriched.get("transcript", ""),
+                    earnings_history_context=enriched.get("earnings_history", ""),
+                    news_context=enriched.get("news", ""),
                 )
                 if result is not None:
                     llm_scores[ticker] = result
@@ -803,18 +821,37 @@ def run_discovery_job(self, discovery_run_id: str):
             if ctx:
                 filing_contexts[ticker] = ctx
 
+        # ── Phase A enrichment — transcript, news, earnings history ─────────
+        enriched_contexts = {}
+        try:
+            for ticker in clean_tickers:
+                ctx_data = av.get_enriched_llm_context(ticker)
+                enriched_contexts[ticker] = ctx_data
+                if any(ctx_data.values()):
+                    logger.info(
+                        f"Discovery enrichment {ticker}: "
+                        f"transcript={bool(ctx_data['transcript'])}, "
+                        f"news={bool(ctx_data['news'])}, "
+                        f"earnings={bool(ctx_data['earnings_history'])}"
+                    )
+        except Exception as e:
+            logger.warning(f"Discovery enrichment failed (non-blocking): {e}")
+
         # ── Claude LLM scoring ─────────────────────────────────────
         llm_scorer = LLMScorer()
         llm_scores = {}
         for ticker in clean_tickers:
-            ctx = filing_contexts.get(ticker, "")
+            ctx      = filing_contexts.get(ticker, "")
+            enriched = enriched_contexts.get(ticker, {})
             result = llm_scorer.score(
                 ticker=ticker,
                 company_name=ticker,
                 frequency=frequency,
                 period=rebalance_date.strftime("%Y-%m"),
                 filing_context=ctx,
-                earnings_context="",
+                earnings_context=enriched.get("transcript", ""),
+                earnings_history_context=enriched.get("earnings_history", ""),
+                news_context=enriched.get("news", ""),
             )
             if result is not None:
                 llm_scores[ticker] = result

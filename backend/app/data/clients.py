@@ -218,6 +218,245 @@ class AlphaVantageClient:
             raise AlphaVantageError("No fundamental data fetched")
         return pd.concat(frames, ignore_index=True)
 
+    def get_earnings_transcript(self, ticker: str, quarters: int = 2) -> str:
+        """
+        Fetch the most recent earnings call transcript(s) via AV EARNINGS_CALL_TRANSCRIPT.
+
+        Returns a formatted string ready for Claude's earnings_context slot.
+        Falls back to empty string on any error — never blocks the scoring pipeline.
+
+        AV returns transcripts quarterly. We fetch the last `quarters` transcripts
+        and concatenate them so Claude sees management commentary across 2 periods.
+        """
+        if not self.api_key:
+            return ""
+
+        texts = []
+        # AV transcript endpoint requires year + quarter parameters
+        # We try the most recent 2 quarters using current date
+        from datetime import datetime
+        now = datetime.utcnow()
+        # Build (year, quarter) pairs for the last `quarters` periods
+        periods = []
+        y, q = now.year, (now.month - 1) // 3 + 1
+        for _ in range(quarters):
+            periods.append((y, q))
+            q -= 1
+            if q == 0:
+                q = 4
+                y -= 1
+
+        for year, quarter in periods:
+            try:
+                resp = requests.get(
+                    self.BASE_URL,
+                    params={
+                        "function": "EARNINGS_CALL_TRANSCRIPT",
+                        "symbol":   ticker,
+                        "year":     year,
+                        "quarter":  quarter,
+                        "apikey":   self.api_key,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                # Handle rate limit / permission messages
+                if "Information" in data or "Note" in data:
+                    break
+
+                transcript = data.get("transcript", [])
+                if not transcript:
+                    continue
+
+                # Transcript is a list of {speaker, title, content} dicts
+                header = f"\n=== EARNINGS CALL Q{quarter} {year} ===\n"
+                body = "\n".join(
+                    f"[{t.get('title', t.get('speaker', 'Speaker'))}] {t.get('content', '')}"
+                    for t in transcript
+                    if t.get("content")
+                )
+                if body:
+                    texts.append(header + body)
+
+                time.sleep(1.0)  # Respect rate limits
+
+            except Exception as e:
+                logger_av.debug(f"Transcript fetch failed {ticker} Q{quarter}/{year}: {e}")
+                continue
+
+        if not texts:
+            logger_av.debug(f"No transcript available for {ticker}")
+            return ""
+
+        result = "\n\n".join(texts)
+        logger_av.info(f"AV transcript: {ticker} — {len(result):,} chars from {len(texts)} quarter(s)")
+        return result
+
+    def get_news_sentiment(self, ticker: str, limit: int = 20) -> str:
+        """
+        Fetch recent news articles with sentiment scores via AV NEWS_SENTIMENT.
+
+        Returns a formatted string for Claude's news_context slot.
+        Includes: headline, source, relevance score, sentiment label, and summary.
+        Filters to articles with relevance score > 0.3 for the specific ticker.
+        """
+        if not self.api_key:
+            return ""
+
+        try:
+            resp = requests.get(
+                self.BASE_URL,
+                params={
+                    "function":   "NEWS_SENTIMENT",
+                    "tickers":    ticker,
+                    "limit":      limit,
+                    "sort":       "LATEST",
+                    "apikey":     self.api_key,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "Information" in data or "Note" in data:
+                return ""
+
+            feed = data.get("feed", [])
+            if not feed:
+                return ""
+
+            lines = [f"=== RECENT NEWS & SENTIMENT ({ticker}) ===\n"]
+            for article in feed[:limit]:
+                # Find this ticker's relevance and sentiment in the ticker_sentiments list
+                ticker_sentiment = next(
+                    (ts for ts in article.get("ticker_sentiment", [])
+                     if ts.get("ticker") == ticker),
+                    None,
+                )
+                relevance = float(ticker_sentiment.get("relevance_score", 0)) if ticker_sentiment else 0
+                if relevance < 0.3:
+                    continue  # Skip low-relevance articles
+
+                sentiment_label = ticker_sentiment.get("ticker_sentiment_label", "Neutral") if ticker_sentiment else "Neutral"
+                sentiment_score = float(ticker_sentiment.get("ticker_sentiment_score", 0)) if ticker_sentiment else 0
+
+                title   = article.get("title", "")
+                source  = article.get("source", "")
+                summary = article.get("summary", "")[:400]  # Trim long summaries
+                time_pub = article.get("time_published", "")[:8]  # YYYYMMDD
+
+                lines.append(
+                    f"[{time_pub} | {source} | Relevance: {relevance:.2f} | Sentiment: {sentiment_label} ({sentiment_score:+.2f})]\n"
+                    f"  {title}\n"
+                    f"  {summary}\n"
+                )
+
+            if len(lines) == 1:  # Only the header — no relevant articles
+                return ""
+
+            result = "\n".join(lines)
+            logger_av.info(f"AV news: {ticker} — {len(lines)-1} relevant articles")
+            return result
+
+        except Exception as e:
+            logger_av.debug(f"News sentiment fetch failed {ticker}: {e}")
+            return ""
+
+    def get_earnings_history(self, ticker: str) -> str:
+        """
+        Fetch EPS and revenue surprise history via AV EARNINGS.
+
+        Returns a formatted string showing the last 8 quarters of:
+        - Reported vs estimated EPS
+        - Surprise % (beat/miss)
+        - Revenue reported vs estimated
+
+        This gives Claude the "earnings quality" context the paper highlights:
+        consistent beats signal management credibility; misses signal execution risk.
+        """
+        if not self.api_key:
+            return ""
+
+        try:
+            resp = requests.get(
+                self.BASE_URL,
+                params={
+                    "function": "EARNINGS",
+                    "symbol":   ticker,
+                    "apikey":   self.api_key,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "Information" in data or "Note" in data:
+                return ""
+
+            quarterly = data.get("quarterlyEarnings", [])
+            if not quarterly:
+                return ""
+
+            lines = [f"=== EARNINGS HISTORY ({ticker}) — Last 8 Quarters ===\n"]
+            beats = 0
+            for q in quarterly[:8]:
+                date       = q.get("fiscalDateEnding", "")
+                reported   = q.get("reportedEPS", "None")
+                estimated  = q.get("estimatedEPS", "None")
+                surprise   = q.get("surprisePercentage", "None")
+                try:
+                    surp_f = float(surprise)
+                    direction = "BEAT" if surp_f > 0 else "MISS"
+                    surp_str  = f"{surp_f:+.1f}% ({direction})"
+                    if surp_f > 0:
+                        beats += 1
+                except (ValueError, TypeError):
+                    surp_str = "N/A"
+
+                lines.append(
+                    f"  {date}: EPS reported={reported} vs estimated={estimated} | Surprise: {surp_str}"
+                )
+
+            # Summary line — management credibility signal
+            shown = len([q for q in quarterly[:8]])
+            if shown > 0:
+                lines.append(f"\n  Beat rate last {shown} quarters: {beats}/{shown} ({100*beats//shown}%)")
+
+            result = "\n".join(lines)
+            logger_av.info(f"AV earnings: {ticker} — {shown} quarters of EPS history")
+            return result
+
+        except Exception as e:
+            logger_av.debug(f"Earnings history fetch failed {ticker}: {e}")
+            return ""
+
+    def get_enriched_llm_context(
+        self,
+        ticker: str,
+        delay_sec: float = 1.0,
+    ) -> dict[str, str]:
+        """
+        Fetch all three Phase A enrichment signals in one call.
+        Returns dict with keys: transcript, news, earnings_history.
+
+        Rate-limited: sleeps between each call.
+        Never raises — all failures return empty strings.
+        """
+        transcript      = self.get_earnings_transcript(ticker)
+        time.sleep(delay_sec)
+        news            = self.get_news_sentiment(ticker)
+        time.sleep(delay_sec)
+        earnings_history = self.get_earnings_history(ticker)
+        time.sleep(delay_sec)
+
+        return {
+            "transcript":       transcript,
+            "news":             news,
+            "earnings_history": earnings_history,
+        }
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # app/data/edgar_client.py

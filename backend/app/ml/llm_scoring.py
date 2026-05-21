@@ -21,41 +21,59 @@ from anthropic import APIConnectionError, APITimeoutError, RateLimitError
 logger = logging.getLogger(__name__)
 
 # ── Prompt template (Section 3.3, Cohen et al. 2025) ─────────────────────
-SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst. Your task is to score the investment attractiveness of {ticker} ({company_name}) for the upcoming {frequency} rebalancing period.
+SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst scoring {ticker} ({company_name}) for a {frequency} portfolio rebalancing.
 
-You will be provided with:
-1. Most recent SEC filing excerpts (10-K / 10-Q / 8-K)
-2. Earnings call transcript highlights
-3. Recent news summaries
+You have been provided with four layers of information. Use all available layers — weight recent evidence more heavily.
 
-Evaluate the stock on the following criteria, drawing only on the information provided:
-- Revenue growth trajectory and quality
-- Margin expansion or compression
-- Management credibility and forward guidance
-- Competitive positioning and moat durability
-- Macro and regulatory risk exposure
+SCORING CRITERIA:
+1. Revenue growth trajectory and quality (not just magnitude — consistency matters)
+2. Margin expansion or compression (operating leverage signals)
+3. Management credibility: do they beat their own guidance? What does their tone signal?
+4. Competitive positioning and moat durability
+5. Macro and regulatory tailwinds or headwinds specific to this company
+
+EARNINGS QUALITY HEURISTIC (from earnings history):
+- Beat rate > 75%: strong management credibility, score positively
+- Beat rate 50-75%: neutral
+- Beat rate < 50%: execution risk, score negatively
+- Trend matters: improving beat rate is bullish; deteriorating is bearish
+
+NEWS SENTIMENT HEURISTIC:
+- Weight recent high-relevance articles (relevance > 0.7) more than older low-relevance ones
+- Product launches, partnerships, regulatory approvals → positive signals
+- Litigation, guidance cuts, executive departures → negative signals
+- Ignore noise (analyst upgrades/downgrades without new information)
+
+EARNINGS CALL HEURISTIC:
+- Confident, specific forward guidance > vague optimism
+- Management acknowledging challenges while providing concrete plans > dismissing them
+- Analyst Q&A tone: pointed questions about margins/competition are a risk signal
 
 Return ONLY valid JSON with this exact structure:
 {{
-  "score": <float between 0.0 and 1.0, where 1.0 = strongest buy, 0.0 = strongest sell>,
-  "key_positives": [<list of 2-4 specific, evidence-backed positive factors>],
-  "key_risks": [<list of 2-4 specific, evidence-backed risk factors>],
+  "score": <float 0.0–1.0, where 1.0 = strongest conviction buy, 0.0 = strongest conviction sell>,
+  "key_positives": [<2-4 specific, evidence-backed positive factors citing which source they come from>],
+  "key_risks": [<2-4 specific, evidence-backed risk factors citing which source they come from>],
   "confidence": "<low|medium|high>"
 }}
 
+Confidence guide: high = multiple sources align; medium = mixed signals; low = insufficient data.
 Do not include any text outside the JSON object.
 
 TICKER: {ticker}
 COMPANY: {company_name}
 PERIOD: {period} ({frequency})
 
---- SEC FILING CONTEXT ---
+--- SEC FILINGS (10-K / 10-Q / 8-K) ---
 {filing_context}
 
---- EARNINGS CALL CONTEXT ---
+--- EARNINGS CALL TRANSCRIPT ---
 {earnings_context}
 
---- RECENT NEWS ---
+--- EARNINGS SURPRISE HISTORY ---
+{earnings_history_context}
+
+--- RECENT NEWS & SENTIMENT ---
 {news_context}
 """
 
@@ -94,9 +112,16 @@ class LLMScorer:
         filing_context: str,
         earnings_context: str,
         news_context: str = "",
+        earnings_history_context: str = "",
     ) -> Optional[dict]:
         """
         Call Claude API. Returns parsed dict or None on failure.
+
+        Context priority (token budget):
+          - SEC filings:        up to 80K chars  (~60% of budget)
+          - Earnings transcript: up to 40K chars  (~30%)
+          - Earnings history:    up to  5K chars  (~4%)
+          - News:               up to 10K chars  (~8%)
 
         Returns:
             {
@@ -116,8 +141,9 @@ class LLMScorer:
             company_name=company_name,
             frequency=frequency,
             period=period,
-            filing_context=filing_context[:150_000],  # ~200K ctx, conservative trim
-            earnings_context=earnings_context[:30_000],
+            filing_context=filing_context[:80_000],
+            earnings_context=earnings_context[:40_000],
+            earnings_history_context=earnings_history_context[:5_000],
             news_context=news_context[:10_000],
         )
 
