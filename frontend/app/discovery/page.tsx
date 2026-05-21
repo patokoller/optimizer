@@ -386,9 +386,11 @@ export default function DiscoveryPage() {
   const loadLatest = async () => {
     try {
       const data = await api.getLatestDiscovery();
-      setRun(data.run);
-      setScores(data.scores);
-      setRunStatus(data.run.status);
+      if (data.run) {
+        setRun(data.run);
+        setScores(data.scores ?? []);
+        setRunStatus(data.run.status);
+      }
     } catch {}
   };
 

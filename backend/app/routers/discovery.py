@@ -51,7 +51,7 @@ def get_latest_discovery(db: Session = Depends(get_db)):
         .first()
     )
     if not run:
-        raise HTTPException(status_code=404, detail="No completed discovery run found")
+        return {"run": None, "scores": []}  # empty state, not a 404
 
     scores = (
         db.query(models.DiscoveryScore)
