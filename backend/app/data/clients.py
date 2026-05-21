@@ -438,15 +438,19 @@ class AlphaVantageClient:
         delay_sec: float = 1.0,
     ) -> dict[str, str]:
         """
-        Fetch all three Phase A enrichment signals in one call.
-        Returns dict with keys: transcript, news, earnings_history.
+        Fetch Phase A enrichment signals: news sentiment + earnings history.
 
-        Rate-limited: sleeps between each call.
+        NOTE: EARNINGS_CALL_TRANSCRIPT requires AV Premium plan above Plan 30.
+        Transcript fetch is disabled — returns empty string until plan is upgraded.
+        News and earnings history are available on Plan 30.
+
+        Returns dict with keys: transcript, news, earnings_history.
         Never raises — all failures return empty strings.
         """
-        transcript      = self.get_earnings_transcript(ticker)
-        time.sleep(delay_sec)
-        news            = self.get_news_sentiment(ticker)
+        # Transcript disabled — requires higher AV premium tier
+        transcript = ""
+
+        news = self.get_news_sentiment(ticker)
         time.sleep(delay_sec)
         earnings_history = self.get_earnings_history(ticker)
         time.sleep(delay_sec)

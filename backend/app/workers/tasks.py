@@ -33,6 +33,8 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Visibility timeout must exceed the longest job (discovery ~90min → set 3h)
+    broker_transport_options={"visibility_timeout": 10800},
 )
 
 
@@ -204,6 +206,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 )
                 if result is not None:
                     llm_scores[ticker] = result
+                    time.sleep(1.5)  # Throttle to avoid Claude 429 rate limits
                 else:
                     llm_failed_global = True
                     warnings_list.append(f"LLM_SCORE_FAILED: {ticker} — Claude API unavailable")
@@ -855,6 +858,7 @@ def run_discovery_job(self, discovery_run_id: str):
             )
             if result is not None:
                 llm_scores[ticker] = result
+                time.sleep(1.5)  # Throttle to avoid Claude 429 rate limits
 
         # ── Macro regime ───────────────────────────────────────────
         from app.data.fred_client import FREDClient
