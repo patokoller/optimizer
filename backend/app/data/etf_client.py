@@ -52,6 +52,9 @@ KNOWN_EQUITY_ETFS = {
     "XLB", "XLU", "XLRE", "SMH", "SOXX", "QQQ", "SPY", "IWM", "VTI",
     "ARKK", "ARKG", "ARKF", "ARKQ", "ARKW",
 }
+
+# BRK.B fix: Berkshire Hathaway uses a non-standard ticker — map to scoreable form
+TICKER_NORMALISATION = {
     "BRK.B": "BRK-B",
     "BRK.A": "BRK-A",
     "BF.B":  "BF-B",
