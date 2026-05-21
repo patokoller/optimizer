@@ -164,25 +164,44 @@ export default function PortfolioPage() {
                           </td>
                           <td className="table-cell text-muted text-xs">{h.currency}</td>
                           <td className="table-cell">
-                            <button
-                              onClick={async () => {
-                                const next = !h.isEtf;
-                                await api.toggleEtf(portfolio.id, h.id, next);
-                                setPortfolio(p => p ? {
-                                  ...p,
-                                  holdings: p.holdings.map(x =>
-                                    x.id === h.id ? { ...x, isEtf: next } : x
-                                  )
-                                } : p);
-                              }}
-                              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                                h.isEtf
-                                  ? "bg-primary/20 text-primary border border-primary/40"
-                                  : "bg-surface2 text-muted border border-border hover:border-primary/40"
-                              }`}
-                            >
-                              {h.isEtf ? "ETF ✓" : "Stock"}
-                            </button>
+                            {h.isEtf ? (
+                              <span className="inline-flex items-center gap-1">
+                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-primary/20 text-primary border border-primary/40">
+                                  ETF
+                                </span>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await api.toggleEtf(portfolio.id, h.id, false);
+                                      setPortfolio(p => p ? {
+                                        ...p,
+                                        holdings: p.holdings.map(x =>
+                                          x.id === h.id ? { ...x, isEtf: false } : x
+                                        )
+                                      } : p);
+                                    } catch { /* ignore */ }
+                                  }}
+                                  className="text-muted hover:text-error text-xs leading-none"
+                                  title="Remove ETF flag"
+                                >×</button>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await api.toggleEtf(portfolio.id, h.id, true);
+                                    setPortfolio(p => p ? {
+                                      ...p,
+                                      holdings: p.holdings.map(x =>
+                                        x.id === h.id ? { ...x, isEtf: true } : x
+                                      )
+                                    } : p);
+                                  } catch { /* ignore */ }
+                                }}
+                                className="text-xs text-muted hover:text-primary transition-colors"
+                                title="Mark as ETF"
+                              >+ ETF</button>
+                            )}
                           </td>
                         </tr>
                       ))}
