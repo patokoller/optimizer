@@ -504,7 +504,11 @@ class AlphaVantageClient:
         delay_sec: float = 1.0,
     ) -> dict[str, str]:
         """
-        Fetch Phase A enrichment: earnings transcript, news sentiment, EPS history.
+        Fetch Phase A + B enrichment signals for Claude LLM scoring.
+
+        Phase A: earnings transcript, news sentiment, EPS surprise history
+        Phase B: company overview (valuation + analyst target), balance sheet, cash flow
+
         Never raises — all failures return empty strings.
         """
         transcript       = self.get_earnings_transcript(ticker)
@@ -514,11 +518,207 @@ class AlphaVantageClient:
         earnings_history = self.get_earnings_history(ticker)
         time.sleep(delay_sec)
 
+        # Phase B
+        overview      = self.get_company_overview(ticker)
+        time.sleep(delay_sec)
+        balance_sheet = self.get_balance_sheet(ticker)
+        time.sleep(delay_sec)
+        cash_flow     = self.get_cash_flow(ticker)
+        time.sleep(delay_sec)
+
         return {
             "transcript":       transcript,
             "news":             news,
             "earnings_history": earnings_history,
+            "overview":         overview,
+            "balance_sheet":    balance_sheet,
+            "cash_flow":        cash_flow,
         }
+
+    # ── Phase B methods ────────────────────────────────────────────────────
+
+    def _av_get(self, params: dict, timeout: int = 20) -> dict | None:
+        """
+        Thin helper: GET to AV base URL, return parsed JSON or None on any error.
+        Handles rate-limit messages gracefully.
+        """
+        if not self.api_key:
+            return None
+        try:
+            resp = requests.get(
+                self.BASE_URL,
+                params={**params, "apikey": self.api_key},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if "Information" in data or "Note" in data:
+                logger_av.debug(f"AV rate limit for {params.get('symbol', '?')}: {params.get('function')}")
+                return None
+            return data
+        except Exception as e:
+            logger_av.debug(f"AV {params.get('function')} failed for {params.get('symbol', '?')}: {e}")
+            return None
+
+    def get_company_overview(self, ticker: str) -> str:
+        """
+        Fetch company overview: valuation multiples, analyst target, market cap.
+
+        Returns a formatted string for Claude's overview_context slot.
+        Key signals for Claude:
+          - Analyst target price vs current: upside/downside framing
+          - P/E, EV/EBITDA: valuation relative to sector
+          - Dividend yield: income profile
+          - 52-week range: momentum context
+        """
+        data = self._av_get({"function": "OVERVIEW", "symbol": ticker})
+        if not data or "Symbol" not in data:
+            return ""
+
+        def fmt(key: str, prefix: str = "", suffix: str = "") -> str:
+            v = data.get(key, "N/A")
+            if v in ("None", "0", "", None):
+                return "N/A"
+            return f"{prefix}{v}{suffix}"
+
+        lines = [
+            f"=== COMPANY OVERVIEW ({ticker}) ===",
+            f"Name:               {data.get('Name', 'N/A')}",
+            f"Sector / Industry:  {data.get('Sector', 'N/A')} / {data.get('Industry', 'N/A')}",
+            f"Market Cap:         {fmt('MarketCapitalization', '$')}",
+            f"",
+            f"--- Valuation ---",
+            f"P/E (TTM):          {fmt('TrailingPE')}",
+            f"Forward P/E:        {fmt('ForwardPE')}",
+            f"Price/Sales:        {fmt('PriceToSalesRatioTTM')}",
+            f"Price/Book:         {fmt('PriceToBookRatio')}",
+            f"EV/EBITDA:          {fmt('EVToEBITDA')}",
+            f"EV/Revenue:         {fmt('EVToRevenue')}",
+            f"",
+            f"--- Analyst Consensus ---",
+            f"Analyst Target:     {fmt('AnalystTargetPrice', '$')}",
+            f"Analyst Count:      {fmt('AnalystRatingStrongBuy')} strong buy | {fmt('AnalystRatingBuy')} buy | {fmt('AnalystRatingHold')} hold | {fmt('AnalystRatingSell')} sell",
+            f"",
+            f"--- Price Context ---",
+            f"52-Week High:       {fmt('52WeekHigh', '$')}",
+            f"52-Week Low:        {fmt('52WeekLow', '$')}",
+            f"50-Day MA:          {fmt('50DayMovingAverage', '$')}",
+            f"200-Day MA:         {fmt('200DayMovingAverage', '$')}",
+            f"",
+            f"--- Income & Growth ---",
+            f"Dividend Yield:     {fmt('DividendYield', suffix='%')}",
+            f"EPS (TTM):          {fmt('EPS', '$')}",
+            f"Revenue/Share:      {fmt('RevenuePerShareTTM', '$')}",
+            f"Revenue Growth YoY: {fmt('RevenueGrowthYOY', suffix='%')}",
+            f"Earnings Growth YoY:{fmt('EarningsGrowthYOY', suffix='%')}",
+            f"Profit Margin:      {fmt('ProfitMargin', suffix='%')}",
+            f"Operating Margin:   {fmt('OperatingMarginTTM', suffix='%')}",
+            f"ROE:                {fmt('ReturnOnEquityTTM', suffix='%')}",
+            f"ROA:                {fmt('ReturnOnAssetsTTM', suffix='%')}",
+            f"Beta:               {fmt('Beta')}",
+        ]
+
+        result = "\n".join(lines)
+        logger_av.info(f"AV overview: {ticker} — {len(result):,} chars")
+        return result
+
+    def get_balance_sheet(self, ticker: str) -> str:
+        """
+        Fetch the last 4 quarters of balance sheet data.
+
+        Key signals for Claude:
+          - Debt/equity: leverage risk
+          - Current ratio: liquidity
+          - Cash & equivalents: financial flexibility
+          - Goodwill/intangibles: acquisition premium risk
+        """
+        data = self._av_get({"function": "BALANCE_SHEET", "symbol": ticker}, timeout=30)
+        if not data or "quarterlyReports" not in data:
+            return ""
+
+        reports = data["quarterlyReports"][:4]  # Last 4 quarters
+        if not reports:
+            return ""
+
+        lines = [f"=== BALANCE SHEET ({ticker}) — Last 4 Quarters ===\n"]
+        for q in reports:
+            date         = q.get("fiscalDateEnding", "")
+            total_assets = _safe_float(q.get("totalAssets"))
+            total_liab   = _safe_float(q.get("totalLiabilities"))
+            total_equity = _safe_float(q.get("totalShareholderEquity"))
+            cash         = _safe_float(q.get("cashAndCashEquivalentsAtCarryingValue"))
+            short_debt   = _safe_float(q.get("shortTermDebt") or q.get("shortLongTermDebtTotal"))
+            long_debt    = _safe_float(q.get("longTermDebt"))
+            total_debt   = (short_debt or 0) + (long_debt or 0)
+            current_assets = _safe_float(q.get("totalCurrentAssets"))
+            current_liab   = _safe_float(q.get("totalCurrentLiabilities"))
+            goodwill     = _safe_float(q.get("goodwill"))
+
+            # Derived ratios
+            debt_equity  = round(total_debt / total_equity, 2) if total_equity and total_equity != 0 else None
+            current_ratio = round(current_assets / current_liab, 2) if current_liab and current_liab != 0 else None
+
+            def m(v):  # Format as $M
+                return f"${v/1e6:.0f}M" if v else "N/A"
+
+            lines.append(
+                f"  {date}: Assets={m(total_assets)} | Liabilities={m(total_liab)} | Equity={m(total_equity)}\n"
+                f"    Cash={m(cash)} | Total Debt={m(total_debt)} | D/E={debt_equity} | "
+                f"Current Ratio={current_ratio} | Goodwill={m(goodwill)}"
+            )
+
+        result = "\n".join(lines)
+        logger_av.info(f"AV balance sheet: {ticker} — {len(reports)} quarters")
+        return result
+
+    def get_cash_flow(self, ticker: str) -> str:
+        """
+        Fetch the last 4 quarters of cash flow data.
+
+        Key signals for Claude:
+          - Free cash flow = operating CF - capex: quality of earnings signal
+          - Operating CF vs net income: cash conversion quality
+          - Share buybacks: capital allocation signal
+          - Capex trend: investment cycle phase
+        """
+        data = self._av_get({"function": "CASH_FLOW", "symbol": ticker}, timeout=30)
+        if not data or "quarterlyReports" not in data:
+            return ""
+
+        reports = data["quarterlyReports"][:4]
+        if not reports:
+            return ""
+
+        lines = [f"=== CASH FLOW ({ticker}) — Last 4 Quarters ===\n"]
+        for q in reports:
+            date       = q.get("fiscalDateEnding", "")
+            op_cf      = _safe_float(q.get("operatingCashflow"))
+            capex      = _safe_float(q.get("capitalExpenditures"))
+            net_income = _safe_float(q.get("netIncome"))
+            buybacks   = _safe_float(q.get("repurchaseOfCommonStock"))
+            dividends  = _safe_float(q.get("dividendPayout"))
+
+            # Free cash flow
+            fcf = (op_cf or 0) - abs(capex or 0) if op_cf is not None else None
+
+            # Cash conversion ratio
+            ccr = round(op_cf / net_income, 2) if (net_income and net_income != 0 and op_cf) else None
+
+            def m(v):
+                return f"${v/1e6:.0f}M" if v else "N/A"
+            def sign_m(v):  # Buybacks reported negative in AV
+                if v is None: return "N/A"
+                return f"${abs(v)/1e6:.0f}M"
+
+            lines.append(
+                f"  {date}: Op CF={m(op_cf)} | Capex={m(capex)} | FCF={m(fcf)}\n"
+                f"    Net Income={m(net_income)} | Cash Conversion={ccr} | "
+                f"Buybacks={sign_m(buybacks)} | Dividends={sign_m(dividends)}"
+            )
+
+        result = "\n".join(lines)
+        logger_av.info(f"AV cash flow: {ticker} — {len(reports)} quarters")
+        return result
 
 
 # ────────────────────────────────────────────────────────────────────────────

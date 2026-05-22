@@ -23,14 +23,16 @@ logger = logging.getLogger(__name__)
 # ── Prompt template (Section 3.3, Cohen et al. 2025) ─────────────────────
 SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst scoring {ticker} ({company_name}) for a {frequency} portfolio rebalancing.
 
-You have been provided with four layers of information. Use all available layers — weight recent evidence more heavily.
+You have been provided with six layers of information. Use all available layers — weight recent evidence more heavily.
 
 SCORING CRITERIA:
 1. Revenue growth trajectory and quality (not just magnitude — consistency matters)
 2. Margin expansion or compression (operating leverage signals)
 3. Management credibility: do they beat their own guidance? What does their tone signal?
 4. Competitive positioning and moat durability
-5. Macro and regulatory tailwinds or headwinds specific to this company
+5. Balance sheet health: leverage, liquidity, cash generation quality
+6. Valuation relative to analyst consensus and historical norms
+7. Macro and regulatory tailwinds or headwinds specific to this company
 
 EARNINGS QUALITY HEURISTIC (from earnings history):
 - Beat rate > 75%: strong management credibility, score positively
@@ -38,16 +40,26 @@ EARNINGS QUALITY HEURISTIC (from earnings history):
 - Beat rate < 50%: execution risk, score negatively
 - Trend matters: improving beat rate is bullish; deteriorating is bearish
 
+VALUATION HEURISTIC (from company overview):
+- Analyst target > 20% above current price: positive signal (consensus upside)
+- Analyst target < current price: negative signal (consensus downside)
+- EV/EBITDA > 40x: premium valuation — requires strong growth to justify
+- P/E compression trend: bearish; expansion: bullish
+
+BALANCE SHEET HEURISTIC:
+- D/E > 2.0: elevated leverage risk, especially in rising rate environment
+- Current ratio < 1.0: near-term liquidity concern
+- High goodwill relative to equity: acquisition integration risk
+
+CASH FLOW HEURISTIC:
+- FCF > net income: high-quality earnings (cash conversion > 1.0)
+- FCF < 0 while profitable: earnings quality concern
+- Rising buybacks + FCF positive: strong capital allocation signal
+
 NEWS SENTIMENT HEURISTIC:
-- Weight recent high-relevance articles (relevance > 0.7) more than older low-relevance ones
+- Weight recent high-relevance articles (relevance > 0.7) more than older ones
 - Product launches, partnerships, regulatory approvals → positive signals
 - Litigation, guidance cuts, executive departures → negative signals
-- Ignore noise (analyst upgrades/downgrades without new information)
-
-EARNINGS CALL HEURISTIC:
-- Confident, specific forward guidance > vague optimism
-- Management acknowledging challenges while providing concrete plans > dismissing them
-- Analyst Q&A tone: pointed questions about margins/competition are a risk signal
 
 Return ONLY valid JSON with this exact structure:
 {{
@@ -64,6 +76,9 @@ TICKER: {ticker}
 COMPANY: {company_name}
 PERIOD: {period} ({frequency})
 
+--- COMPANY OVERVIEW (valuation, analyst consensus, market context) ---
+{overview_context}
+
 --- SEC FILINGS (10-K / 10-Q / 8-K) ---
 {filing_context}
 
@@ -72,6 +87,12 @@ PERIOD: {period} ({frequency})
 
 --- EARNINGS SURPRISE HISTORY ---
 {earnings_history_context}
+
+--- BALANCE SHEET (last 4 quarters) ---
+{balance_sheet_context}
+
+--- CASH FLOW (last 4 quarters) ---
+{cash_flow_context}
 
 --- RECENT NEWS & SENTIMENT ---
 {news_context}
@@ -113,24 +134,21 @@ class LLMScorer:
         earnings_context: str,
         news_context: str = "",
         earnings_history_context: str = "",
+        overview_context: str = "",
+        balance_sheet_context: str = "",
+        cash_flow_context: str = "",
     ) -> Optional[dict]:
         """
-        Call Claude API. Returns parsed dict or None on failure.
+        Call Claude API with enriched context. Returns parsed dict or None on failure.
 
-        Context priority (token budget):
-          - SEC filings:        up to 80K chars  (~60% of budget)
+        Context token budget (200K context window):
+          - Company overview:    up to  5K chars  (~4%)
+          - SEC filings:         up to 60K chars  (~45%)
           - Earnings transcript: up to 40K chars  (~30%)
-          - Earnings history:    up to  5K chars  (~4%)
-          - News:               up to 10K chars  (~8%)
-
-        Returns:
-            {
-                "score": float,            # 0.0–1.0
-                "key_positives": [str],
-                "key_risks": [str],
-                "confidence": str,
-            }
-            or None if API unavailable.
+          - Earnings history:    up to  3K chars  (~2%)
+          - Balance sheet:       up to  5K chars  (~4%)
+          - Cash flow:           up to  5K chars  (~4%)
+          - News:                up to 10K chars  (~8%)
         """
         if self.client is None:
             logger.warning(f"LLM scorer not initialized — skipping {ticker}")
@@ -141,9 +159,12 @@ class LLMScorer:
             company_name=company_name,
             frequency=frequency,
             period=period,
-            filing_context=filing_context[:80_000],
+            overview_context=overview_context[:5_000],
+            filing_context=filing_context[:60_000],
             earnings_context=earnings_context[:40_000],
-            earnings_history_context=earnings_history_context[:5_000],
+            earnings_history_context=earnings_history_context[:3_000],
+            balance_sheet_context=balance_sheet_context[:5_000],
+            cash_flow_context=cash_flow_context[:5_000],
             news_context=news_context[:10_000],
         )
 

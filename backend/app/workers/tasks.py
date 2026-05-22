@@ -179,8 +179,9 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
                     logger.info(
-                        f"Enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, "
-                        f"news={bool(ctx_data['news'])}, earnings={bool(ctx_data['earnings_history'])}"
+                        f"Enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, news={bool(ctx_data['news'])}, "
+                        f"earnings={bool(ctx_data['earnings_history'])}, overview={bool(ctx_data['overview'])}, "
+                        f"balance_sheet={bool(ctx_data['balance_sheet'])}, cash_flow={bool(ctx_data['cash_flow'])}"
                     )
         except Exception as e:
             logger.warning(f"Enrichment fetch failed (non-blocking): {e}")
@@ -200,6 +201,9 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     filing_context=ctx,
                     earnings_context=enriched.get("transcript", ""),
                     earnings_history_context=enriched.get("earnings_history", ""),
+                    overview_context=enriched.get("overview", ""),
+                    balance_sheet_context=enriched.get("balance_sheet", ""),
+                    cash_flow_context=enriched.get("cash_flow", ""),
                     news_context=enriched.get("news", ""),
                 )
                 if result is not None:
@@ -830,10 +834,9 @@ def run_discovery_job(self, discovery_run_id: str):
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
                     logger.info(
-                        f"Discovery enrichment {ticker}: "
-                        f"transcript={bool(ctx_data['transcript'])}, "
-                        f"news={bool(ctx_data['news'])}, "
-                        f"earnings={bool(ctx_data['earnings_history'])}"
+                        f"Discovery enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, news={bool(ctx_data['news'])}, "
+                        f"earnings={bool(ctx_data['earnings_history'])}, overview={bool(ctx_data['overview'])}, "
+                        f"balance_sheet={bool(ctx_data['balance_sheet'])}, cash_flow={bool(ctx_data['cash_flow'])}"
                     )
         except Exception as e:
             logger.warning(f"Discovery enrichment failed (non-blocking): {e}")
@@ -852,6 +855,9 @@ def run_discovery_job(self, discovery_run_id: str):
                 filing_context=ctx,
                 earnings_context=enriched.get("transcript", ""),
                 earnings_history_context=enriched.get("earnings_history", ""),
+                overview_context=enriched.get("overview", ""),
+                balance_sheet_context=enriched.get("balance_sheet", ""),
+                cash_flow_context=enriched.get("cash_flow", ""),
                 news_context=enriched.get("news", ""),
             )
             if result is not None:
