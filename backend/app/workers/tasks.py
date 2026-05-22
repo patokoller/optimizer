@@ -894,8 +894,41 @@ def run_discovery_job(self, discovery_run_id: str):
         risk_metrics = {}
         if prices_df is not None:
             try:
-                from app.ml.risk import compute_risk_metrics
-                risk_metrics = compute_risk_metrics(prices_df, rebalance_date)
+                prices_df["date"] = pd.to_datetime(prices_df["date"])
+                qqq_prices = (
+                    prices_df[prices_df["ticker"] == "QQQ"]
+                    .set_index("date")["close"]
+                    if "QQQ" in prices_df["ticker"].values else None
+                )
+                for ticker, grp in prices_df.groupby("ticker"):
+                    try:
+                        closes    = grp.sort_values("date").set_index("date")["close"]
+                        daily_ret = closes.pct_change().dropna()
+                        vol_21d   = float(daily_ret.tail(21).std() * (252**0.5)) if len(daily_ret) >= 21 else None
+                        vol_63d   = float(daily_ret.tail(63).std() * (252**0.5)) if len(daily_ret) >= 63 else None
+                        tail      = closes.tail(252)
+                        roll_max  = tail.expanding().max()
+                        mdd       = float(((tail - roll_max) / roll_max).min()) if len(tail) > 0 else None
+                        annual_ret = float(daily_ret.tail(252).mean() * 252) if len(daily_ret) >= 252 else None
+                        sharpe    = float(annual_ret / vol_63d) if (annual_ret and vol_63d and vol_63d > 0) else None
+                        beta      = None
+                        if qqq_prices is not None:
+                            qqq_ret = qqq_prices.pct_change().dropna()
+                            common  = daily_ret.index.intersection(qqq_ret.index)
+                            if len(common) >= 60:
+                                cov  = float(daily_ret[common].tail(252).cov(qqq_ret[common].tail(252)))
+                                var  = float(qqq_ret[common].tail(252).var())
+                                beta = round(cov / var, 3) if var > 0 else None
+                        risk_metrics[ticker] = {
+                            "vol_21d": round(vol_21d, 4) if vol_21d else None,
+                            "vol_63d": round(vol_63d, 4) if vol_63d else None,
+                            "mdd":     round(mdd, 4)     if mdd     else None,
+                            "sharpe":  round(sharpe, 3)  if sharpe  else None,
+                            "beta":    beta,
+                        }
+                    except Exception:
+                        pass
+                logger.info(f"Discovery risk metrics computed for {len(risk_metrics)} tickers")
             except Exception as e:
                 logger.warning(f"Discovery risk metrics failed: {e}")
 
