@@ -504,10 +504,11 @@ class AlphaVantageClient:
         delay_sec: float = 1.0,
     ) -> dict[str, str]:
         """
-        Fetch Phase A + B enrichment signals for Claude LLM scoring.
+        Fetch Phase A + B + C enrichment signals for Claude LLM scoring.
 
         Phase A: earnings transcript, news sentiment, EPS surprise history
         Phase B: company overview (valuation + analyst target), balance sheet, cash flow
+        Phase C: insider transactions (Form 4), institutional holdings
 
         Never raises — all failures return empty strings.
         """
@@ -517,13 +518,15 @@ class AlphaVantageClient:
         time.sleep(delay_sec)
         earnings_history = self.get_earnings_history(ticker)
         time.sleep(delay_sec)
-
-        # Phase B
-        overview      = self.get_company_overview(ticker)
+        overview         = self.get_company_overview(ticker)
         time.sleep(delay_sec)
-        balance_sheet = self.get_balance_sheet(ticker)
+        balance_sheet    = self.get_balance_sheet(ticker)
         time.sleep(delay_sec)
-        cash_flow     = self.get_cash_flow(ticker)
+        cash_flow        = self.get_cash_flow(ticker)
+        time.sleep(delay_sec)
+        insider          = self.get_insider_transactions(ticker)
+        time.sleep(delay_sec)
+        institutional    = self.get_institutional_holdings(ticker)
         time.sleep(delay_sec)
 
         return {
@@ -533,6 +536,8 @@ class AlphaVantageClient:
             "overview":         overview,
             "balance_sheet":    balance_sheet,
             "cash_flow":        cash_flow,
+            "insider":          insider,
+            "institutional":    institutional,
         }
 
     # ── Phase B methods ────────────────────────────────────────────────────
@@ -720,9 +725,162 @@ class AlphaVantageClient:
         logger_av.info(f"AV cash flow: {ticker} — {len(reports)} quarters")
         return result
 
+    def get_insider_transactions(self, ticker: str, lookback_days: int = 180) -> str:
+        """
+        Fetch recent insider transactions via AV INSIDER_TRANSACTIONS.
 
-# ────────────────────────────────────────────────────────────────────────────
-# app/data/edgar_client.py
+        Returns a formatted string for Claude's insider_context slot.
+        Covers the last `lookback_days` of SEC Form 4 filings.
+
+        Key signals for Claude:
+          - CEO/CFO buying: strongest conviction signal (they have most to lose)
+          - Cluster buying: multiple insiders buying simultaneously is very bullish
+          - Mass selling: bearish, especially if concentrated near guidance periods
+          - Option exercises followed by immediate sale: routine, low signal
+          - Planned 10b5-1 sales: scheduled in advance, lower signal than discretionary
+        """
+        data = self._av_get({"function": "INSIDER_TRANSACTIONS", "symbol": ticker})
+        if not data:
+            return ""
+
+        # AV returns list under 'data' key
+        transactions = data.get("data", [])
+        if not transactions:
+            return ""
+
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+
+        # Filter to recent transactions and parse
+        recent = []
+        for t in transactions:
+            try:
+                date_str = t.get("transactionDate", "")
+                if not date_str:
+                    continue
+                tx_date = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                if tx_date < cutoff:
+                    continue
+
+                tx_type    = t.get("transactionType", "")
+                shares     = _safe_float(t.get("shares"))
+                price      = _safe_float(t.get("sharePrice"))
+                value      = (shares or 0) * (price or 0)
+                name       = t.get("executiveName", "Unknown")
+                title      = t.get("executiveTitle", "")
+                plan_10b51 = t.get("plan10b51", "false").lower() == "true"
+
+                recent.append({
+                    "date":      date_str[:10],
+                    "name":      name,
+                    "title":     title,
+                    "type":      tx_type,
+                    "shares":    shares,
+                    "price":     price,
+                    "value":     value,
+                    "plan10b51": plan_10b51,
+                })
+            except Exception:
+                continue
+
+        if not recent:
+            return ""
+
+        # Sort by date descending, cap at 20 most recent
+        recent.sort(key=lambda x: x["date"], reverse=True)
+        recent = recent[:20]
+
+        # Summarise buy/sell sentiment
+        buys  = [t for t in recent if "P" in t["type"] or "A" in t["type"]]  # Purchase / Award
+        sells = [t for t in recent if "S" in t["type"]]                      # Sale
+
+        buy_value  = sum(t["value"] for t in buys  if t["value"])
+        sell_value = sum(t["value"] for t in sells if t["value"])
+
+        lines = [
+            f"=== INSIDER TRANSACTIONS ({ticker}) — Last {lookback_days} days ===",
+            f"Summary: {len(buys)} buys (${buy_value/1e3:.0f}K total) | "
+            f"{len(sells)} sells (${sell_value/1e3:.0f}K total)\n",
+        ]
+
+        for t in recent:
+            plan_flag = " [10b5-1 plan]" if t["plan10b51"] else ""
+            val_str   = f"${t['value']/1e3:.0f}K" if t["value"] else "N/A"
+            lines.append(
+                f"  {t['date']} | {t['name']} ({t['title']}) | "
+                f"{t['type']}{plan_flag} | "
+                f"{int(t['shares'] or 0):,} shares @ ${t['price'] or 'N/A'} = {val_str}"
+            )
+
+        result = "\n".join(lines)
+        logger_av.info(f"AV insider: {ticker} — {len(recent)} transactions")
+        return result
+
+    def get_institutional_holdings(self, ticker: str) -> str:
+        """
+        Fetch institutional holdings summary via AV INSTITUTIONAL_HOLDINGS.
+
+        Returns a formatted string for Claude's institutional_context slot.
+
+        Key signals for Claude:
+          - % institutional ownership: high = sophisticated money consensus
+          - QoQ change in ownership: increasing = accumulation; decreasing = distribution
+          - Number of holders: breadth of institutional conviction
+          - Top holders: if Berkshire/Sequoia/index funds dominate = different signal
+            than if hedge funds dominate (more tactical)
+          - Recent buyers vs sellers: net flow direction
+        """
+        data = self._av_get({"function": "INSTITUTIONAL_HOLDINGS", "symbol": ticker})
+        if not data:
+            return ""
+
+        # AV returns ownership_summary + institutional_ownership list
+        summary = data.get("ownership_summary", {})
+        holders = data.get("institutional_ownership", [])
+
+        if not summary and not holders:
+            return ""
+
+        lines = [f"=== INSTITUTIONAL HOLDINGS ({ticker}) ===\n"]
+
+        # Summary block
+        if summary:
+            inst_pct     = summary.get("institutionalSharesHeldPercent", "N/A")
+            total_shares = _safe_float(summary.get("totalSharesOutstanding"))
+            inst_shares  = _safe_float(summary.get("institutionalSharesHeld"))
+            num_holders  = summary.get("numberOfInstitutionalShareHolders", "N/A")
+            qoq_change   = summary.get("quarterlyChange", "N/A")
+
+            lines.append(
+                f"Institutional Ownership: {inst_pct}%\n"
+                f"Institutional Shares:    {inst_shares/1e6:.1f}M of {total_shares/1e6:.1f}M outstanding\n"
+                f"Number of Holders:       {num_holders}\n"
+                f"QoQ Change:              {qoq_change}%\n"
+            )
+
+        # Top 10 holders
+        if holders:
+            lines.append("--- Top Institutional Holders ---")
+            for h in holders[:10]:
+                name         = h.get("name", "Unknown")
+                shares       = _safe_float(h.get("sharesHeld"))
+                shares_chg   = _safe_float(h.get("changeInShares"))
+                pct_portfolio = h.get("portfolioPercent", "")
+                date_reported = h.get("reportDate", "")
+
+                chg_str = ""
+                if shares_chg is not None:
+                    direction = "▲" if shares_chg > 0 else "▼"
+                    chg_str   = f" ({direction}{abs(shares_chg)/1e6:.1f}M shares QoQ)"
+
+                lines.append(
+                    f"  {name}: {shares/1e6:.1f}M shares{chg_str} "
+                    f"({pct_portfolio}% of portfolio, reported {date_reported})"
+                )
+
+        result = "\n".join(lines)
+        logger_av.info(f"AV institutional: {ticker} — {len(holders)} holders")
+        return result
 # ────────────────────────────────────────────────────────────────────────────
 """
 SEC EDGAR API client — 10-K, 10-Q, 8-K filings.

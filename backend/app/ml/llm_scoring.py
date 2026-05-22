@@ -56,10 +56,18 @@ CASH FLOW HEURISTIC:
 - FCF < 0 while profitable: earnings quality concern
 - Rising buybacks + FCF positive: strong capital allocation signal
 
-NEWS SENTIMENT HEURISTIC:
-- Weight recent high-relevance articles (relevance > 0.7) more than older ones
-- Product launches, partnerships, regulatory approvals → positive signals
-- Litigation, guidance cuts, executive departures → negative signals
+INSIDER TRANSACTIONS HEURISTIC:
+- CEO/CFO buying with own money: strongest bullish signal
+- Cluster buying (3+ insiders): very bullish — coordinated conviction
+- Discretionary selling: mildly bearish (could be liquidity, diversification)
+- 10b5-1 plan sales: pre-scheduled, lower signal — note but don't overweight
+- Mass selling ahead of guidance period: bearish warning signal
+
+INSTITUTIONAL HOLDINGS HEURISTIC:
+- QoQ increase in institutional ownership: accumulation signal
+- QoQ decrease: distribution signal — especially meaningful if >5% change
+- High # of holders with rising concentration: institutional conviction building
+- Hedge fund dominance: tactical/shorter-term view; mutual fund dominance: longer-term thesis
 
 Return ONLY valid JSON with this exact structure:
 {{
@@ -93,6 +101,12 @@ PERIOD: {period} ({frequency})
 
 --- CASH FLOW (last 4 quarters) ---
 {cash_flow_context}
+
+--- INSIDER TRANSACTIONS (Form 4 — last 180 days) ---
+{insider_context}
+
+--- INSTITUTIONAL HOLDINGS (latest 13F filings) ---
+{institutional_context}
 
 --- RECENT NEWS & SENTIMENT ---
 {news_context}
@@ -137,18 +151,22 @@ class LLMScorer:
         overview_context: str = "",
         balance_sheet_context: str = "",
         cash_flow_context: str = "",
+        insider_context: str = "",
+        institutional_context: str = "",
     ) -> Optional[dict]:
         """
-        Call Claude API with enriched context. Returns parsed dict or None on failure.
+        Call Claude API with full enriched context (Phases A + B + C).
 
-        Context token budget (200K context window):
-          - Company overview:    up to  5K chars  (~4%)
-          - SEC filings:         up to 60K chars  (~45%)
-          - Earnings transcript: up to 40K chars  (~30%)
-          - Earnings history:    up to  3K chars  (~2%)
-          - Balance sheet:       up to  5K chars  (~4%)
-          - Cash flow:           up to  5K chars  (~4%)
-          - News:                up to 10K chars  (~8%)
+        Token budget (200K context window):
+          - Company overview:       up to  5K chars
+          - SEC filings:            up to 55K chars
+          - Earnings transcript:    up to 35K chars
+          - Earnings history:       up to  3K chars
+          - Balance sheet:          up to  5K chars
+          - Cash flow:              up to  5K chars
+          - Insider transactions:   up to  4K chars
+          - Institutional holdings: up to  4K chars
+          - News:                   up to  8K chars
         """
         if self.client is None:
             logger.warning(f"LLM scorer not initialized — skipping {ticker}")
@@ -160,12 +178,14 @@ class LLMScorer:
             frequency=frequency,
             period=period,
             overview_context=overview_context[:5_000],
-            filing_context=filing_context[:60_000],
-            earnings_context=earnings_context[:40_000],
+            filing_context=filing_context[:55_000],
+            earnings_context=earnings_context[:35_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],
-            news_context=news_context[:10_000],
+            insider_context=insider_context[:4_000],
+            institutional_context=institutional_context[:4_000],
+            news_context=news_context[:8_000],
         )
 
         try:

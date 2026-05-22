@@ -204,6 +204,8 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     overview_context=enriched.get("overview", ""),
                     balance_sheet_context=enriched.get("balance_sheet", ""),
                     cash_flow_context=enriched.get("cash_flow", ""),
+                    insider_context=enriched.get("insider", ""),
+                    institutional_context=enriched.get("institutional", ""),
                     news_context=enriched.get("news", ""),
                 )
                 if result is not None:
@@ -858,6 +860,8 @@ def run_discovery_job(self, discovery_run_id: str):
                 overview_context=enriched.get("overview", ""),
                 balance_sheet_context=enriched.get("balance_sheet", ""),
                 cash_flow_context=enriched.get("cash_flow", ""),
+                insider_context=enriched.get("insider", ""),
+                institutional_context=enriched.get("institutional", ""),
                 news_context=enriched.get("news", ""),
             )
             if result is not None:
