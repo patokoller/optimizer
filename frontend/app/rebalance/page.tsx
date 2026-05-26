@@ -140,7 +140,7 @@ export default function RebalancePage() {
         <EmptyState
           title="No portfolio loaded"
           description="Upload a portfolio first to generate a rebalance proposal."
-          action={{ label: "Go to Portfolio", href: "/portfolio" }}
+          action={<a href="/portfolio" className="text-xs text-primary underline">Go to Portfolio</a>}
         />
       </div>
     );
@@ -161,7 +161,7 @@ export default function RebalancePage() {
         <EmptyState
           title="No scores available"
           description="Run a score job first to generate a rebalance proposal. Scores power the top-10 selection."
-          action={{ label: "Go to Scoring Engine", href: "/scoring" }}
+          action={<a href="/scoring" className="text-xs text-primary underline">Go to Scoring Engine</a>}
         />
       </div>
     );
