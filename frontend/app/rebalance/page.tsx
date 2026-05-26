@@ -85,10 +85,11 @@ export default function RebalancePage() {
   const [proposal, setProposal] = useState<LiveProposal | null>(null);
   const [loading, setLoading] = useState(true);
   const [optimizerType, setOptimizerType] = useState<"paper_model" | "mvo" | "deep_rl">("paper_model");
-  const { addNotification, currentPortfolioId } = useStore((s) => ({
+  const { addNotification, portfolio } = useStore((s) => ({
     addNotification: s.addNotification,
-    currentPortfolioId: s.currentPortfolioId,
+    portfolio: s.portfolio,
   }));
+  const currentPortfolioId = portfolio?.id ?? null;
 
   const loadProposal = useCallback(async () => {
     if (!currentPortfolioId) return;
