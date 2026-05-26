@@ -302,3 +302,43 @@ export interface AppNotification {
   message: string;
   dismissible?: boolean;
 }
+
+export interface LiveTrade {
+  ticker: string;
+  action: "BUY" | "SELL" | "HOLD";
+  currentWeight: number;
+  proposedWeight: number;
+  deltaWeight: number;
+  combinedScore: number | null;
+  technicalScore: number | null;
+  fundamentalScore: number | null;
+  entropyScore: number | null;
+  confidenceScore: number | null;
+  llmReasoning: {
+    score: number;
+    key_positives: string[];
+    key_risks: string[];
+    confidence: "low" | "medium" | "high";
+  } | null;
+  scoreDelta: number | null;
+  betaVsQqq: number | null;
+  vol21d: number | null;
+  inCurrent: boolean;
+  inProposed: boolean;
+}
+
+export interface LiveProposal {
+  proposal: {
+    runId: string;
+    runDate: string;
+    portfolioId: string;
+    method: string;
+    topN: number;
+    turnover: number;
+    nBuys: number;
+    nSells: number;
+    nHolds: number;
+  } | null;
+  trades: LiveTrade[];
+  reason?: string;
+}

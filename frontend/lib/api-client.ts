@@ -199,6 +199,13 @@ class APIClient {
     return data;
   }
 
+  async getLiveProposal(portfolioId: string): Promise<LiveProposal> {
+    const { data } = await this.http.get<LiveProposal>(
+      `/api/rebalance/live-proposal?portfolio_id=${portfolioId}`
+    );
+    return data;
+  }
+
   // ── Backtest ──────────────────────────────────────────────────────
   async runBacktest(
     portfolioId: string,
