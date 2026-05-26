@@ -38,13 +38,14 @@ def get_live_proposal(
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
+    # ── Use Discovery run (full NASDAQ-100 universe) ───────────────────
+    # Discovery runs score the full universe; ScoreRuns are portfolio-specific.
+    # The rebalance proposal should select from the full universe, not just
+    # tickers already in the portfolio.
     latest_run = (
-        db.query(models.ScoreRun)
-        .filter(
-            models.ScoreRun.portfolio_id == portfolio_id,
-            models.ScoreRun.status.in_(["complete", "complete_with_warnings"]),
-        )
-        .order_by(models.ScoreRun.run_date.desc())
+        db.query(models.DiscoveryRun)
+        .filter(models.DiscoveryRun.status.in_(["complete", "complete_with_warnings"]))
+        .order_by(models.DiscoveryRun.run_date.desc())
         .first()
     )
     if not latest_run:
@@ -52,9 +53,9 @@ def get_live_proposal(
 
     # ── Scores sorted by combined_score ───────────────────────────────
     scores = (
-        db.query(models.Score)
-        .filter(models.Score.run_id == latest_run.id)
-        .order_by(models.Score.combined_score.desc())
+        db.query(models.DiscoveryScore)
+        .filter(models.DiscoveryScore.discovery_run_id == latest_run.id)
+        .order_by(models.DiscoveryScore.combined_score.desc())
         .all()
     )
     if not scores:
@@ -95,7 +96,6 @@ def get_live_proposal(
         else:
             action = "SELL"
 
-        # Find score for this ticker
         score_row = next((s for s in scores if s.ticker == ticker), None)
 
         trades.append({
@@ -140,7 +140,6 @@ def get_live_proposal(
         },
         "trades": trades,
     }
-
 
 
 @router.post("/propose")
