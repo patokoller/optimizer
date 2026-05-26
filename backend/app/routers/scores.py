@@ -120,3 +120,18 @@ def get_latest_regime(
         raise HTTPException(status_code=404, detail="No regime data for this run")
 
     return regime
+
+
+@router.get("/enrichment-cache/stats")
+def enrichment_cache_stats(db: Session = Depends(get_db)):
+    """Return enrichment cache statistics — how many tickers cached per month."""
+    from app.data.enrichment_cache import cache_stats
+    return cache_stats(db)
+
+
+@router.delete("/enrichment-cache/{ticker}")
+def bust_enrichment_cache(ticker: str, db: Session = Depends(get_db)):
+    """Invalidate enrichment cache for a ticker (e.g. after surprise earnings)."""
+    from app.data.enrichment_cache import bust_ticker
+    bust_ticker(db, ticker.upper())
+    return {"ticker": ticker.upper(), "status": "cache_busted"}

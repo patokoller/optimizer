@@ -170,19 +170,27 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
             warnings_list.append("EDGAR_UNAVAILABLE: No filing context — all strategies fall back to w=1.0")
             llm_failed_global = True
 
-        # ── Step 4b: Phase A enrichment — transcript, news, earnings history ──
-        # Per-ticker, non-blocking. Failures return empty strings, never crash the run.
+        # ── Step 4b: Enrichment — with monthly cache ──────────────────
+        # Slow signals (transcript, overview, balance sheet, cash flow, insider,
+        # institutional) are cached per ticker per calendar month.
+        # News is always re-fetched (time-sensitive).
+        from app.data.enrichment_cache import get_or_fetch, cache_stats
         enriched_contexts = {}
+        cache_hits = 0
         try:
             for ticker in tickers:
-                ctx_data = av.get_enriched_llm_context(ticker)
+                ctx_data = get_or_fetch(db, ticker, av)
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
+                    cached = bool(ctx_data.get("_from_cache"))
+                    cache_hits += 1 if cached else 0
                     logger.info(
                         f"Enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, news={bool(ctx_data['news'])}, "
                         f"earnings={bool(ctx_data['earnings_history'])}, overview={bool(ctx_data['overview'])}, "
-                        f"balance_sheet={bool(ctx_data['balance_sheet'])}, cash_flow={bool(ctx_data['cash_flow'])}"
+                        f"insider={bool(ctx_data['insider'])}, institutional={bool(ctx_data['institutional'])}"
                     )
+            stats = cache_stats(db)
+            logger.info(f"Enrichment cache: {cache_hits}/{len(tickers)} hits this run | {stats}")
         except Exception as e:
             logger.warning(f"Enrichment fetch failed (non-blocking): {e}")
 
@@ -828,18 +836,22 @@ def run_discovery_job(self, discovery_run_id: str):
             if ctx:
                 filing_contexts[ticker] = ctx
 
-        # ── Phase A enrichment — transcript, news, earnings history ─────────
+        # ── Enrichment — with monthly cache ────────────────────────────────
+        from app.data.enrichment_cache import get_or_fetch, cache_stats
         enriched_contexts = {}
+        cache_hits = 0
         try:
             for ticker in clean_tickers:
-                ctx_data = av.get_enriched_llm_context(ticker)
+                ctx_data = get_or_fetch(db, ticker, av)
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
                     logger.info(
                         f"Discovery enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, news={bool(ctx_data['news'])}, "
                         f"earnings={bool(ctx_data['earnings_history'])}, overview={bool(ctx_data['overview'])}, "
-                        f"balance_sheet={bool(ctx_data['balance_sheet'])}, cash_flow={bool(ctx_data['cash_flow'])}"
+                        f"insider={bool(ctx_data['insider'])}, institutional={bool(ctx_data['institutional'])}"
                     )
+            stats = cache_stats(db)
+            logger.info(f"Discovery cache: {cache_hits}/{len(clean_tickers)} hits this run | {stats}")
         except Exception as e:
             logger.warning(f"Discovery enrichment failed (non-blocking): {e}")
 
