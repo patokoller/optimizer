@@ -11,6 +11,7 @@ import type {
   RebalanceFreq,
   OptimizerType,
   LiveProposal,
+  DashboardKpis,
 } from "@/types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -203,6 +204,13 @@ class APIClient {
   async getLiveProposal(portfolioId: string): Promise<LiveProposal> {
     const { data } = await this.http.get<LiveProposal>(
       `/api/rebalance/live-proposal?portfolio_id=${portfolioId}`
+    );
+    return data;
+  }
+
+  async getDashboardKpis(portfolioId: string): Promise<DashboardKpis> {
+    const { data } = await this.http.get<DashboardKpis>(
+      `/api/dashboard/kpis?portfolio_id=${portfolioId}`
     );
     return data;
   }

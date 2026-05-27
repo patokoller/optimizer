@@ -342,3 +342,18 @@ export interface LiveProposal {
   trades: LiveTrade[];
   reason?: string;
 }
+
+export interface DashboardKpis {
+  portfolioValue:    number | null;
+  mtdReturn:         number | null;
+  mtdAlpha:          number | null;
+  activeRisk:        number | null;
+  rebalanceDue:      string;
+  daysToRebalance:   number;
+  lastScoreRun:      string | null;
+  topTicker:         string | null;
+  topScore:          number | null;
+  holdingsCount:     number;
+  dataDate:          string | null;
+  alpacaOk:          boolean;
+}

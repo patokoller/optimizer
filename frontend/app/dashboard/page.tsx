@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RefreshCw, TrendingUp, AlertTriangle, ChevronRight } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -11,9 +11,21 @@ import {
   DisclaimerBanner, Btn, STRATEGY_COLORS, Divider,
 } from "@/components/ui";
 import { BENCHMARKS, OPTIMAL_WEIGHTS, type RebalanceFreq } from "@/types";
+import type { DashboardKpis } from "@/types";
+import { api } from "@/lib/api-client";
+import { useStore } from "@/store";
 import Link from "next/link";
 
 const FREQ_TABS: RebalanceFreq[] = ["monthly", "quarterly"];
+
+function pct(v: number, digits = 1) { return `${(v * 100).toFixed(digits)}%`; }
+function currency(v: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
+}
+function fmtDate(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 // Chart tooltip
 function ChartTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
@@ -34,11 +46,22 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: any[] }
 
 export default function DashboardPage() {
   const [freq, setFreq] = useState<RebalanceFreq | "all">("monthly");
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [kpisLoading, setKpisLoading] = useState(true);
+  const portfolio = useStore((s) => s.portfolio);
+
+  useEffect(() => {
+    if (!portfolio?.id) { setKpisLoading(false); return; }
+    setKpisLoading(true);
+    api.getDashboardKpis(portfolio.id)
+      .then(setKpis)
+      .catch(() => setKpis(null))
+      .finally(() => setKpisLoading(false));
+  }, [portfolio?.id]);
 
   const filteredBenchmarks =
     freq === "all" ? BENCHMARKS : BENCHMARKS.filter((b) => b.freq === freq);
 
-  // Chart data — all 6 benchmarks, source-backed
   const chartData = BENCHMARKS.map((b) => ({
     id: b.id,
     label: `${b.strategy.charAt(0).toUpperCase() + b.strategy.slice(1)} ${b.freq === "monthly" ? "M" : "Q"}`,
@@ -49,43 +72,88 @@ export default function DashboardPage() {
     freq: b.freq,
   }));
 
-  const pct = (v: number) =>
-    `${(v * 100).toFixed(2)}%`;
+  // ── KPI derived values ─────────────────────────────────────────────
+  const portfolioValueStr = kpisLoading ? "…"
+    : kpis?.portfolioValue != null ? currency(kpis.portfolioValue) : "—";
+
+  const mtdReturnStr = kpisLoading ? "…"
+    : kpis?.mtdReturn != null ? `${kpis.mtdReturn >= 0 ? "+" : ""}${pct(kpis.mtdReturn)}` : "—";
+
+  const mtdAlphaStr = kpisLoading ? "…"
+    : kpis?.mtdAlpha != null ? `${kpis.mtdAlpha >= 0 ? "+" : ""}${pct(kpis.mtdAlpha)}` : "—";
+
+  const activeRiskStr = kpisLoading ? "…"
+    : kpis?.activeRisk != null ? pct(kpis.activeRisk) : "—";
+
+  const mtdColor  = kpis?.mtdReturn  != null ? (kpis.mtdReturn  >= 0 ? "#3ecf8e" : "#f05252") : undefined;
+  const alphaColor = kpis?.mtdAlpha  != null ? (kpis.mtdAlpha   >= 0 ? "#3ecf8e" : "#f05252") : undefined;
+
+  const lastRunStr = kpisLoading ? "…"
+    : kpis?.lastScoreRun ? fmtDate(kpis.lastScoreRun) : "Never";
 
   return (
     <div className="p-6 max-w-[1280px] space-y-6 animate-in">
 
-      {/* ── Page header ─────────────────────────────────────────────── */}
+      {/* ── Page header ───────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-text">Portfolio Dashboard</h1>
           <p className="text-sm text-muted mt-1">
-            Monthly rebalance cycle · NASDAQ-100 universe · May 2026
+            Monthly rebalance cycle · NASDAQ-100 universe ·{" "}
+            {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+            {kpis?.alpacaOk === false && (
+              <span className="ml-2 text-warning text-xs">· Alpaca unavailable — prices may be stale</span>
+            )}
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
           <Link href="/scoring">
-            <Btn variant="default" icon={<RefreshCw className="w-3.5 h-3.5" />}>
-              Run Scores
-            </Btn>
+            <Btn variant="default" icon={<RefreshCw className="w-3.5 h-3.5" />}>Run Scores</Btn>
           </Link>
           <Link href="/rebalance">
-            <Btn variant="primary" icon={<ChevronRight className="w-3.5 h-3.5" />}>
-              Review Proposal
-            </Btn>
+            <Btn variant="primary" icon={<ChevronRight className="w-3.5 h-3.5" />}>Review Proposal</Btn>
           </Link>
         </div>
       </div>
 
       <DisclaimerBanner />
 
-      {/* ── KPI Strip ───────────────────────────────────────────────── */}
+      {/* ── KPI Strip ─────────────────────────────────────────────── */}
       <div className="flex gap-3 flex-wrap">
-        <KPI label="Portfolio Value"   value="$2,847,392" sub="+8.3% MTD" color="#3ecf8e" />
-        <KPI label="vs. Benchmark (QQQ)" value="+4.7%" sub="Month-to-date alpha" color="#3ecf8e" />
-        <KPI label="Active Risk"       value="12.4%" sub="Annualized volatility" />
-        <KPI label="Rebalance Due"     value="Jun 1" sub="13 days remaining" color="#f5a623" />
-        <KPI label="Scores Last Run"   value="May 1" sub="12:03 AM UTC" />
+        <KPI
+          label="Portfolio Value"
+          value={portfolioValueStr}
+          sub={kpis?.holdingsCount ? `${kpis.holdingsCount} positions` : "Upload portfolio"}
+          color={kpis?.portfolioValue ? "#3ecf8e" : undefined}
+        />
+        <KPI
+          label="MTD Return"
+          value={mtdReturnStr}
+          sub={kpis?.dataDate ? `As of ${kpis.dataDate}` : "No price data"}
+          color={mtdColor}
+        />
+        <KPI
+          label="vs. Benchmark (QQQ)"
+          value={mtdAlphaStr}
+          sub="Month-to-date alpha"
+          color={alphaColor}
+        />
+        <KPI
+          label="Active Risk"
+          value={activeRiskStr}
+          sub="21-day ann. volatility"
+        />
+        <KPI
+          label="Rebalance Due"
+          value={kpis?.rebalanceDue ?? "—"}
+          sub={kpis?.daysToRebalance != null ? `${kpis.daysToRebalance} days` : ""}
+          color="#f5a623"
+        />
+        <KPI
+          label="Scores Last Run"
+          value={lastRunStr}
+          sub={kpis?.topTicker ? `Top: ${kpis.topTicker} (${kpis.topScore?.toFixed(3)})` : ""}
+        />
       </div>
 
       {/* ── Mini strategy score cards ───────────────────────────────── */}
