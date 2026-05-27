@@ -86,7 +86,7 @@ def set_cached(db: Session, ticker: str, context: dict, month: Optional[str] = N
         db.execute(
             text("""
                 INSERT INTO enrichment_cache (ticker, cache_month, context, fetched_at)
-                VALUES (:t, :m, :ctx::jsonb, now())
+                VALUES (:t, :m, CAST(:ctx AS jsonb), now())
                 ON CONFLICT (ticker, cache_month)
                 DO UPDATE SET context = EXCLUDED.context, fetched_at = now()
             """),
