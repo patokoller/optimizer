@@ -51,7 +51,8 @@ REALTIME_KEYS = {"news", "short_interest", "concentration_instruction"}
 
 def _cache_month() -> str:
     """Current calendar month as YYYY-MM."""
-    return datetime.utcnow().strftime("%Y-%m")
+    from datetime import timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def get_cached(db: Session, ticker: str, month: Optional[str] = None) -> Optional[dict]:

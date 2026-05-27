@@ -351,87 +351,138 @@ def split_transcript_qa(transcript: str) -> tuple[str, str]:
 # P3-5  FINRA Short Interest
 # ─────────────────────────────────────────────────────────────────────────────
 
-FINRA_API = "https://api.finra.org/data/group/OTCMarket/name/otcShortInterest"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P3-5  Short Interest  (multi-source: FINRA API → CBOE CSV → FINRA consolidated)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def get_short_interest(ticker: str) -> str:
     """
-    Fetch short interest data from FINRA public API.
-
-    FINRA publishes short interest twice monthly (settlement dates ~15th and ~end).
-    Data: short interest shares, days-to-cover (short interest / avg daily volume).
+    Fetch short interest data — tries multiple free public sources in order:
+      1. FINRA API (OTC endpoint)
+      2. CBOE daily CSV (same FINRA data, no auth required)
+      3. FINRA consolidated equity short interest endpoint
 
     Key signals for Claude:
-      - Days-to-cover > 10: heavily shorted, potential squeeze
-      - Rising short interest + rising stock price: short squeeze building
+      - Days-to-cover > 10: heavily shorted, potential squeeze risk
+      - Rising short interest + rising price: short squeeze building
       - High short + high Claude score: market disagrees — investigate why
       - Declining short interest + positive momentum: shorts covering = bullish
-      - Days-to-cover < 1: negligible short position
-
-    FINRA API is free, no auth required for public short interest data.
     """
+    # Source 1: FINRA OTC API
     try:
-        # FINRA short interest API: https://api.finra.org
         resp = requests.get(
-            FINRA_API,
+            "https://api.finra.org/data/group/OTCMarket/name/otcShortInterest",
             params={
                 "limit": 10,
-                "compareFilters": f"[{{\"fieldName\":\"issueSymbolIdentifier\","
-                                  f"\"compareType\":\"equal\",\"fieldValue\":\"{ticker}\"}}]",
-                "fields": "issueSymbolIdentifier,settlementDate,shortInterestQty,"
-                          "daysToCoverQty,revisionFlag",
+                "compareFilters": (
+                    f'[{{"fieldName":"issueSymbolIdentifier",'
+                    f'"compareType":"equal","fieldValue":"{ticker}"}}]'
+                ),
+                "fields": "issueSymbolIdentifier,settlementDate,shortInterestQty,daysToCoverQty",
             },
             headers={"Accept": "application/json"},
-            timeout=15,
+            timeout=12,
         )
-        resp.raise_for_status()
-        data = resp.json()
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return _fmt_finra(ticker, data, "shortInterestQty", "daysToCoverQty", "FINRA OTC")
+    except Exception:
+        pass
+
+    # Source 2: CBOE daily FINRA short interest CSV
+    try:
+        import io, csv
+        from datetime import timezone
+        today = datetime.now(timezone.utc).date()
+        for days_back in range(12):
+            check = today - timedelta(days=days_back)
+            if check.weekday() >= 5:
+                continue
+            url = (
+                "https://res.cboe.com/us/equities/market_statistics/short_interest"
+                f"/Short_Interest-finra-{check.strftime('%Y%m%d')}.csv"
+            )
+            r = requests.get(url, timeout=15)
+            if r.status_code != 200:
+                continue
+            reader = csv.DictReader(io.StringIO(r.text))
+            rows = [row for row in reader
+                    if row.get("Symbol", row.get("symbol", row.get("Issue Symbol", ""))).strip().upper() == ticker.upper()]
+            if rows:
+                row = rows[0]
+                date_str = check.isoformat()
+                short_q = row.get("Short Interest", row.get("Current Short Interest", "N/A"))
+                dtc     = row.get("Days to Cover", row.get("Days To Cover", "N/A"))
+                line = _short_line(date_str, short_q, dtc)
+                logger.info(f"Phase D short interest: {ticker} — CBOE CSV {date_str}")
+                return f"=== SHORT INTEREST ({ticker}) — CBOE/FINRA {date_str} ===\n{line}"
     except Exception as e:
-        logger.debug(f"FINRA short interest failed for {ticker}: {e}")
-        return ""
+        logger.debug(f"CBOE short interest failed for {ticker}: {e}")
 
-    if not data or not isinstance(data, list) or len(data) == 0:
-        return ""
-
-    # Sort by settlement date desc
-    records = sorted(data, key=lambda x: x.get("settlementDate", ""), reverse=True)
-
-    lines = [f"=== FINRA SHORT INTEREST ({ticker}) ===\n"]
-
-    for r in records[:4]:  # last 4 settlement dates (~2 months)
-        settle     = r.get("settlementDate", "?")
-        short_qty  = r.get("shortInterestQty")
-        dtc        = r.get("daysToCoverQty")
-
-        short_str = f"{int(short_qty):,}" if short_qty else "N/A"
-        dtc_str   = f"{float(dtc):.1f} days" if dtc else "N/A"
-
-        # Signal interpretation
-        if dtc and float(dtc) > 10:
-            signal = "⚠ HIGH — potential squeeze risk"
-        elif dtc and float(dtc) > 5:
-            signal = "Elevated"
-        elif dtc and float(dtc) < 1:
-            signal = "Negligible"
-        else:
-            signal = "Moderate"
-
-        lines.append(
-            f"  {settle}: short_interest={short_str} shares | "
-            f"days_to_cover={dtc_str} | signal={signal}"
+    # Source 3: FINRA consolidated equity short interest
+    try:
+        resp = requests.get(
+            "https://api.finra.org/data/group/consolidated/name/equityShortInterest",
+            params={
+                "limit": 8,
+                "compareFilters": (
+                    f'[{{"fieldName":"symbolCode",'
+                    f'"compareType":"equal","fieldValue":"{ticker}"}}]'
+                ),
+                "fields": "symbolCode,settlementDate,currentShortInterest,daysToCover",
+            },
+            headers={"Accept": "application/json"},
+            timeout=12,
         )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return _fmt_finra(ticker, data, "currentShortInterest", "daysToCover", "FINRA Consolidated")
+    except Exception:
+        pass
 
-    # Trend: compare most recent to 2 periods ago
+    logger.debug(f"Phase D short interest: no data available for {ticker}")
+    return ""
+
+
+def _fmt_finra(ticker: str, data: list, si_key: str, dtc_key: str, source: str) -> str:
+    records = sorted(data, key=lambda x: x.get("settlementDate", ""), reverse=True)
+    lines = [f"=== SHORT INTEREST ({ticker}) — {source} ===\n"]
+    for r in records[:4]:
+        lines.append(_short_line(r.get("settlementDate", "?"), r.get(si_key), r.get(dtc_key)))
+    # Trend
     if len(records) >= 3:
-        recent_si = records[0].get("shortInterestQty", 0) or 0
-        older_si  = records[2].get("shortInterestQty", 0) or 0
-        if older_si > 0:
-            change_pct = (recent_si - older_si) / older_si * 100
-            direction  = "▲ rising" if change_pct > 5 else ("▼ falling" if change_pct < -5 else "→ stable")
-            lines.append(f"\nShort interest trend (2 periods): {direction} ({change_pct:+.1f}%)")
+        try:
+            recent = float(records[0].get(si_key, 0) or 0)
+            older  = float(records[2].get(si_key, 0) or 0)
+            if older > 0:
+                pct = (recent - older) / older * 100
+                dir_ = "▲ rising" if pct > 5 else ("▼ falling" if pct < -5 else "→ stable")
+                lines.append(f"\nShort interest trend: {dir_} ({pct:+.1f}%)")
+        except (ValueError, TypeError):
+            pass
+    logger.info(f"Phase D short interest: {ticker} — {source}, {len(records)} periods")
+    return "\n".join(lines)
 
-    result = "\n".join(lines)
-    logger.info(f"Phase D short interest: {ticker} — {len(records)} periods")
-    return result
+
+def _short_line(settle: str, short_qty, dtc) -> str:
+    try:
+        short_str = f"{int(float(short_qty)):,}" if short_qty and short_qty != "N/A" else "N/A"
+    except (ValueError, TypeError):
+        short_str = "N/A"
+    try:
+        dtc_f   = float(dtc) if dtc and dtc != "N/A" else None
+        dtc_str = f"{dtc_f:.1f} days" if dtc_f is not None else "N/A"
+        if   dtc_f is not None and dtc_f > 10: signal = "⚠ HIGH — potential squeeze risk"
+        elif dtc_f is not None and dtc_f > 5:  signal = "Elevated"
+        elif dtc_f is not None and dtc_f < 1:  signal = "Negligible"
+        else:                                    signal = "Moderate"
+    except (ValueError, TypeError):
+        dtc_str, signal = "N/A", "Unknown"
+    return f"  {settle}: short_interest={short_str} | days_to_cover={dtc_str} | {signal}"
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
