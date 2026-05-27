@@ -335,5 +335,8 @@ class DiscoveryScore(Base):
     realised_vol_21d     = Column(Float)
     beta_vs_qqq          = Column(Float)
     sharpe_1y            = Column(Float)
+    # Regime context — was this score computed under a regime-adjusted w?
+    regime_adjusted      = Column(Boolean, default=False, nullable=False)
+    regime_label         = Column(String)   # e.g. "Risk-On Momentum"
     created_at           = Column(DateTime, default=datetime.utcnow, nullable=False)
     run                  = relationship("DiscoveryRun", back_populates="scores")

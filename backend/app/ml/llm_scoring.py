@@ -220,17 +220,5 @@ class LLMScorer:
             return None
 
 
-def get_cache_key(ticker: str, period: str, strategy: str) -> str:
-    """Cache key: ticker + year-month + strategy."""
-    return f"{ticker}:{period}:{strategy}"
 
 
-def is_cached(db_scores: list, ticker: str, period: str) -> Optional[dict]:
-    """
-    Check if LLM score exists in the DB for this ticker/month.
-    Returns the cached reasoning dict or None.
-    """
-    for score in db_scores:
-        if score.ticker == ticker and score.llm_reasoning_json:
-            return score.llm_reasoning_json
-    return None

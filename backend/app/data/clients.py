@@ -954,6 +954,13 @@ class EDGARClient:
             logger_edgar.warning(f"Could not load company_tickers.json: {e}")
         return _COMPANY_TICKERS_CACHE
 
+    # Ticker → CIK overrides for acquired, renamed, or delisted companies
+    # ANSS (ANSYS) was acquired by Synopsys in 2024; may still appear in portfolios
+    # BRK.B handled via the clean fallback below
+    _CIK_OVERRIDES: dict[str, str] = {
+        "ANSS": "0000820081",   # ANSYS Inc — retained its own CIK post-acquisition close
+    }
+
     def get_cik(self, ticker: str) -> str:
         """
         Look up company CIK by ticker symbol using SEC company_tickers.json.
@@ -961,6 +968,12 @@ class EDGARClient:
         """
         if ticker.upper() in ETF_TICKERS:
             raise EDGARError(f"{ticker} is an ETF — no individual company filing on EDGAR")
+
+        # Check hardcoded overrides first
+        override = self._CIK_OVERRIDES.get(ticker.upper())
+        if override:
+            logger_edgar.debug(f"CIK override for {ticker}: {override}")
+            return override
 
         company_data = self._load_company_tickers()
         for val in company_data.values():

@@ -16,7 +16,7 @@ import {
   BENCHMARKS, OPTIMAL_WEIGHTS,
   type StrategyType, type Score, type MarketRegime,
 } from "@/types";
-import { SectionHeader, Btn, EmptyState, Spinner, DisclaimerBanner, STRATEGY_COLORS } from "@/components/ui";
+import { SectionHeader, Btn, EmptyState, Spinner, DisclaimerBanner, MethodologyBanner, STRATEGY_COLORS } from "@/components/ui";
 
 // ── Micro-components ─────────────────────────────────────────────────────────
 
@@ -603,6 +603,7 @@ export default function ScoringPage() {
       </div>
 
       <DisclaimerBanner />
+      <MethodologyBanner />
 
       {/* Regime Banner */}
       <RegimeBanner regime={regime} />

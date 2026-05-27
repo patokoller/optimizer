@@ -172,3 +172,20 @@ def cache_stats(db: Session) -> dict:
         ]
     except Exception:
         return []
+
+
+def extract_company_name(overview_text: str, ticker: str) -> str:
+    """
+    Extract company name from the cached AV overview text.
+    Falls back to ticker if not found.
+
+    The overview text contains: "Name:               Apple Inc."
+    """
+    if not overview_text:
+        return ticker
+    for line in overview_text.splitlines():
+        if line.strip().startswith("Name:"):
+            name = line.split("Name:", 1)[-1].strip()
+            if name and name != "N/A":
+                return name
+    return ticker

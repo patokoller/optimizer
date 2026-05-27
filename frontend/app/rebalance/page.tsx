@@ -214,33 +214,51 @@ export default function RebalancePage() {
           />
 
           {/* Optimizer selector — informational */}
+          {/* Optimizer selector */}
           <div className="flex gap-2 mb-4">
-            {(["paper_model", "mvo", "deep_rl"] as const).map((o) => (
-              <button
-                key={o}
-                onClick={() => setOptimizerType(o)}
-                disabled={o !== "paper_model"}
-                className="px-3 py-1.5 rounded border text-xs font-medium transition-all"
-                style={{
-                  background:   optimizerType === o ? "#4f8ef7" : "#22253a",
-                  borderColor:  optimizerType === o ? "#4f8ef7" : "#2d3148",
-                  color:        optimizerType === o ? "#fff"    : o === "paper_model" ? "#8b90a7" : "#2d3148",
-                  cursor:       o !== "paper_model" ? "not-allowed" : "pointer",
-                  opacity:      o !== "paper_model" ? 0.4 : 1,
-                }}
-                title={o !== "paper_model" ? "Available in Phase 3" : undefined}
-              >
-                {o === "paper_model" ? "Paper Model (Top-10)" : o === "mvo" ? "MVO" : "Deep RL (Phase 3)"}
-              </button>
-            ))}
+            {(["paper_model", "mvo", "deep_rl"] as const).map((o) => {
+              const isActive = optimizerType === o;
+              const isDisabled = o !== "paper_model";
+              const label = o === "paper_model"
+                ? "Paper Model (Top-10)"
+                : o === "mvo"
+                ? "MVO (Phase 3)"
+                : "Deep RL (Phase 3)";
+              const tooltip = isDisabled
+                ? "Available in Phase 3 — requires Deep RL optimizer"
+                : undefined;
+              return (
+                <button
+                  key={o}
+                  onClick={() => !isDisabled && setOptimizerType(o)}
+                  disabled={isDisabled}
+                  title={tooltip}
+                  className="px-3 py-1.5 rounded border text-xs font-medium transition-all"
+                  style={{
+                    background:   isActive  ? "#4f8ef7" : "#22253a",
+                    borderColor:  isActive  ? "#4f8ef7" : "#2d3148",
+                    color:        isActive  ? "#fff"    : "#2d3148",
+                    cursor:       isDisabled ? "not-allowed" : "pointer",
+                    opacity:      isDisabled ? 0.35 : 1,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead>
                 <tr>
-                  {["Ticker", "Current Wt", "Proposed Wt", "Δ Weight", "Action", "Combined", "Technical", "Fundamental", "Entropy", "Confidence", "Δ Score"].map((h) => (
-                    <th key={h} className="table-header whitespace-nowrap">{h}</th>
+                  {["Ticker", "Current Wt", "Proposed Wt", "Δ Weight", "Action", "Combined", "Technical", "Fundamental", "Entropy", "Confidence ⓘ", "Δ Score"].map((h) => (
+                    <th key={h} className="table-header whitespace-nowrap"
+                      title={h === "Confidence ⓘ"
+                        ? "Claude API confidence (high=0.9 / medium=0.6 / low=0.3) weighted by macro regime confidence. Not a probability of price appreciation."
+                        : undefined}>
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>

@@ -198,12 +198,14 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         llm_scorer = LLMScorer()
         llm_scores = {}
         if not llm_failed_global:
+            from app.data.enrichment_cache import extract_company_name
             for ticker in tickers:
                 ctx      = filing_contexts.get(ticker, "")
                 enriched = enriched_contexts.get(ticker, {})
+                company_name = extract_company_name(enriched.get("overview", ""), ticker)
                 result = llm_scorer.score(
                     ticker=ticker,
-                    company_name=ticker,
+                    company_name=company_name,
                     frequency=frequency,
                     period=rebalance_date.strftime("%Y-%m"),
                     filing_context=ctx,
@@ -858,12 +860,14 @@ def run_discovery_job(self, discovery_run_id: str):
         # ── Claude LLM scoring ─────────────────────────────────────
         llm_scorer = LLMScorer()
         llm_scores = {}
+        from app.data.enrichment_cache import extract_company_name
         for ticker in clean_tickers:
             ctx      = filing_contexts.get(ticker, "")
             enriched = enriched_contexts.get(ticker, {})
+            company_name = extract_company_name(enriched.get("overview", ""), ticker)
             result = llm_scorer.score(
                 ticker=ticker,
-                company_name=ticker,
+                company_name=company_name,
                 frequency=frequency,
                 period=rebalance_date.strftime("%Y-%m"),
                 filing_context=ctx,
@@ -1050,6 +1054,9 @@ def run_discovery_job(self, discovery_run_id: str):
                 realised_vol_21d  = risk.get("vol_21d"),
                 beta_vs_qqq       = risk.get("beta"),
                 sharpe_1y         = risk.get("sharpe"),
+                # P1-3: store whether this score was regime-adjusted
+                regime_adjusted   = any(v != 1.0 for v in regime_data.get("factor_weight_adj", {}).values()),
+                regime_label      = regime_data.get("label", "Neutral / Mixed"),
             )
             db.add(score_row)
 

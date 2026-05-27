@@ -345,6 +345,21 @@ export function DisclaimerBanner() {
   );
 }
 
+export function MethodologyBanner() {
+  return (
+    <div className="flex items-start gap-2.5 px-3 py-2 bg-primary/6 border border-primary/20 rounded-md text-xs text-primary/80 leading-relaxed">
+      <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+      <span>
+        <strong className="text-primary">Live scores — not a replication of the paper's backtest.</strong>{" "}
+        These scores are computed using the paper's methodology (three-strategy ensemble + Claude semantic scoring)
+        with live rolling-window retraining on current market data.
+        Optimal ML weights (w = 1.00 / 0.15 / 0.70) were derived from 2020–2025 backtested data and may
+        not be optimal for the current regime. Do not compare these scores directly to the paper's published figures.
+      </span>
+    </div>
+  );
+}
+
 // ── Progress Bar ──────────────────────────────────────────────────────
 export function ProgressBar({ value, className }: { value: number; className?: string }) {
   return (

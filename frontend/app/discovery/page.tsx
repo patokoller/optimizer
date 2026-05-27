@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Play, Search, TrendingUp, TrendingDown, Minus, Zap, Target, Star, ChevronDown, ChevronUp, AlertCircle } from "lucide-react";
 import { useStore } from "@/store";
 import { api } from "@/lib/api-client";
-import { Btn, EmptyState, Spinner, DisclaimerBanner } from "@/components/ui";
+import { Btn, EmptyState, Spinner, DisclaimerBanner, MethodologyBanner } from "@/components/ui";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -471,6 +471,7 @@ export default function DiscoveryPage() {
       </div>
 
       <DisclaimerBanner />
+      <MethodologyBanner />
 
       {/* Regime strip */}
       {run?.regimeLabel && (
