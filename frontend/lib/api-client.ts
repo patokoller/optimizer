@@ -12,6 +12,8 @@ import type {
   OptimizerType,
   LiveProposal,
   DashboardKpis,
+  PaperBenchmark,
+  LivePerformance,
 } from "@/types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -211,6 +213,20 @@ class APIClient {
   async getDashboardKpis(portfolioId: string): Promise<DashboardKpis> {
     const { data } = await this.http.get<DashboardKpis>(
       `/api/dashboard/kpis?portfolio_id=${portfolioId}`
+    );
+    return data;
+  }
+
+  async getBacktestBenchmarks(frequency: string = "all"): Promise<{ benchmarks: PaperBenchmark[] }> {
+    const { data } = await this.http.get<{ benchmarks: PaperBenchmark[] }>(
+      `/api/backtest/benchmarks?frequency=${frequency}`
+    );
+    return data;
+  }
+
+  async getLivePerformance(portfolioId: string): Promise<LivePerformance> {
+    const { data } = await this.http.get<LivePerformance>(
+      `/api/backtest/live-performance?portfolio_id=${portfolioId}`
     );
     return data;
   }

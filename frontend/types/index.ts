@@ -357,3 +357,48 @@ export interface DashboardKpis {
   dataDate:          string | null;
   alpacaOk:          boolean;
 }
+
+export interface PaperBenchmark {
+  id: string;
+  strategy: "technical" | "fundamental" | "entropy";
+  frequency: "monthly" | "quarterly";
+  mlWeight: number;
+  llmWeight: number;
+  sharpeRatio: number;
+  averageReturn: number;
+  volatility: number;
+  cumulativeReturn: number;
+  cagr: number;
+  sortino_est: number;
+  sortino_note: string;
+  badge: string | null;
+  badgeColor: string | null;
+  note: string;
+  nPeriods: number;
+  backtestPeriod: string;
+}
+
+export interface TickerReturn {
+  ticker: string;
+  entryPrice: number;
+  currentPrice: number;
+  return: number | null;
+  combinedScore: number | null;
+}
+
+export interface LivePerformance {
+  available: boolean;
+  reason?: string;
+  label?: string;
+  type?: string;
+  runDate?: string;
+  dataThrough?: string;
+  nTradingDays?: number;
+  tickers?: string[];
+  tickerReturns?: TickerReturn[];
+  portfolioReturn?: number | null;
+  qqqReturn?: number | null;
+  alpha?: number | null;
+  dailySeries?: { date: string; cumulativeRet: number }[];
+  disclaimer?: string;
+}
