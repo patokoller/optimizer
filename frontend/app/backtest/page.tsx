@@ -187,20 +187,36 @@ function CovidPanel() {
 }
 
 // ── live performance panel ───────────────────────────────────────────────
-function LivePanel({ perf }: { perf: LivePerformance | null }) {
-  if (!perf) {
+function LivePanel({ perf, loading, hasPortfolio }: {
+  perf: LivePerformance | null;
+  loading: boolean;
+  hasPortfolio: boolean;
+}) {
+  if (!hasPortfolio) {
     return (
       <EmptyState
-        title="Loading forward performance…"
-        description="Fetching current top-10 returns from Alpaca."
+        title="No portfolio loaded"
+        description="Load a portfolio to see forward performance of the current top-10."
+        action={<a href="/portfolio" className="text-xs text-primary underline">Go to Portfolio</a>}
       />
     );
   }
-  if (!perf.available) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-3 text-muted text-sm py-10 justify-center">
+        <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
+        Fetching top-10 returns from Alpaca…
+      </div>
+    );
+  }
+  if (!perf || !perf.available) {
     return (
       <EmptyState
         title="Forward performance unavailable"
-        description={perf.reason ?? "Run a discovery job first to populate the top-10 selection."}
+        description={perf?.reason ?? "Run a discovery job first to populate the top-10 selection."}
       />
     );
   }
@@ -339,11 +355,15 @@ export default function BacktestPage() {
       .catch(() => {});
   }, []);
 
+  const [perfLoading, setPerfLoading] = useState(false);
+
   useEffect(() => {
     if (!portfolio?.id) return;
+    setPerfLoading(true);
     api.getLivePerformance(portfolio.id)
       .then(setPerf)
-      .catch(() => setPerf({ available: false, reason: "Failed to load performance data" }));
+      .catch(() => setPerf({ available: false, reason: "Failed to load performance data — check backend logs" }))
+      .finally(() => setPerfLoading(false));
   }, [portfolio?.id]);
 
   const filtered = freq === "all"
@@ -668,7 +688,7 @@ export default function BacktestPage() {
               Scores will differ subtly from the paper's published figures.
             </span>
           </div>
-          <LivePanel perf={perf} />
+          <LivePanel perf={perf} loading={perfLoading} hasPortfolio={!!portfolio?.id} />
         </div>
       )}
 
