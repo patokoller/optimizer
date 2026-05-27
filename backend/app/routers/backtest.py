@@ -221,14 +221,19 @@ def get_live_performance(
             "tickers":   tickers,
         }
 
-    # Fetch prices: from run_date to today
+    # Fetch prices: from run_date through now
+    # start: beginning of run_date (inclusive)
+    # end:   current datetime (inclusive of today's session if market is open)
+    # We go back an extra day before run_date to guarantee we always get an
+    # entry-price bar even if run_date was a weekend or holiday.
+    fetch_start = run_date - timedelta(days=3)
     alpaca = AlpacaClient()
     try:
         all_tickers = list(set(tickers + ["QQQ"]))
         df = alpaca.get_ohlcv(
             all_tickers,
-            start=datetime.combine(run_date, datetime.min.time()),
-            end=datetime.combine(today, datetime.min.time()),
+            start=datetime.combine(fetch_start, datetime.min.time()),
+            end=datetime.now(),          # include today's completed bars
         )
     except AlpacaDataError as e:
         return {"available": False, "reason": f"Alpaca unavailable: {e}"}
@@ -237,27 +242,46 @@ def get_live_performance(
         return {"available": False, "reason": "No price data returned from Alpaca"}
 
     df["date"] = pd.to_datetime(df["date"])
+
+    # Find the first trading day on or after run_date (handles weekends/holidays)
+    dates_on_or_after = df[df["date"].dt.date >= run_date]["date"].unique()
+    if len(dates_on_or_after) == 0:
+        return {"available": False, "reason": f"No trading data on or after run date {run_date}"}
+
+    entry_date = sorted(dates_on_or_after)[0]
+    exit_date  = df["date"].max()
+
+    # Need at least 1 completed bar after entry
+    if entry_date >= exit_date:
+        return {
+            "available": False,
+            "reason":    f"Only one trading day available since run date ({entry_date.date()}) — check back tomorrow",
+        }
+
     first_date = df["date"].min()
-    last_date  = df["date"].max()
-    n_days     = (last_date - first_date).days
+    last_date  = exit_date
+    n_days     = len(df["date"].unique())
 
-    if n_days < 1:
-        return {"available": False, "reason": "Insufficient price history"}
-
-    # Per-ticker return since run date
+    # Per-ticker return: entry at first bar on/after run_date, exit at latest bar
     ticker_returns = []
     for ticker in tickers:
         t_df = df[df["ticker"] == ticker].sort_values("date")
-        if len(t_df) < 2:
+        # Entry: first bar on or after run_date
+        entry_rows = t_df[t_df["date"] >= entry_date]
+        if entry_rows.empty:
             continue
-        entry = float(t_df.iloc[0]["close"])
-        exit_ = float(t_df.iloc[-1]["close"])
+        entry_row = entry_rows.iloc[0]
+        exit_row  = t_df.iloc[-1]
+        if entry_row["date"] >= exit_row["date"]:
+            continue  # no forward bar yet
+        entry = float(entry_row["close"])
+        exit_ = float(exit_row["close"])
         ret   = (exit_ - entry) / entry if entry > 0 else None
         ticker_returns.append({
-            "ticker":        ticker,
-            "entry_price":   round(entry, 2),
-            "current_price": round(exit_, 2),
-            "return":        round(ret, 4) if ret is not None else None,
+            "ticker":         ticker,
+            "entry_price":    round(entry, 2),
+            "current_price":  round(exit_, 2),
+            "return":         round(ret, 4) if ret is not None else None,
             "combined_score": scores_map.get(ticker),
         })
 
@@ -268,35 +292,39 @@ def get_live_performance(
     valid_rets = [t["return"] for t in ticker_returns if t["return"] is not None]
     port_return = sum(valid_rets) / len(valid_rets) if valid_rets else None
 
-    # QQQ return over same period
+    # QQQ return over same window (entry_date to exit_date)
     qqq_df = df[df["ticker"] == "QQQ"].sort_values("date")
     qqq_return = None
-    if len(qqq_df) >= 2:
-        qqq_start = float(qqq_df.iloc[0]["close"])
-        qqq_end   = float(qqq_df.iloc[-1]["close"])
-        qqq_return = round((qqq_end - qqq_start) / qqq_start, 4) if qqq_start > 0 else None
+    if not qqq_df.empty:
+        qqq_entry_rows = qqq_df[qqq_df["date"] >= entry_date]
+        if len(qqq_entry_rows) >= 2:
+            qqq_start = float(qqq_entry_rows.iloc[0]["close"])
+            qqq_end   = float(qqq_entry_rows.iloc[-1]["close"])
+            qqq_return = round((qqq_end - qqq_start) / qqq_start, 4) if qqq_start > 0 else None
 
     alpha = round(port_return - qqq_return, 4) if (port_return is not None and qqq_return is not None) else None
 
-    # Daily portfolio series for sparkline
+    # Daily portfolio series for sparkline — from entry_date onwards
     daily_series = []
     try:
-        port_df = df[df["ticker"].isin(tickers)].copy()
+        port_df = df[(df["ticker"].isin(tickers)) & (df["date"] >= entry_date)].copy()
         daily_value = (
             port_df
             .groupby("date")["close"]
-            .mean()  # equal-weight proxy
+            .mean()
             .reset_index()
             .rename(columns={"close": "price"})
+            .sort_values("date")
         )
-        base_price = float(daily_value.iloc[0]["price"])
-        daily_series = [
-            {
-                "date":           d["date"].strftime("%Y-%m-%d"),
-                "cumulative_ret": round((float(d["price"]) - base_price) / base_price, 4),
-            }
-            for _, d in daily_value.iterrows()
-        ]
+        if len(daily_value) >= 2:
+            base_price = float(daily_value.iloc[0]["price"])
+            daily_series = [
+                {
+                    "date":           d["date"].strftime("%Y-%m-%d"),
+                    "cumulative_ret": round((float(d["price"]) - base_price) / base_price, 4),
+                }
+                for _, d in daily_value.iterrows()
+            ]
     except Exception as e:
         logger.debug(f"Daily series failed: {e}")
 
@@ -305,8 +333,9 @@ def get_live_performance(
         "label":          "Current Top-10 (Forward, Equal-Weight)",
         "type":           "forward",
         "run_date":       run_date.isoformat(),
+        "entry_date":     entry_date.strftime("%Y-%m-%d"),
         "data_through":   last_date.strftime("%Y-%m-%d"),
-        "n_trading_days": len(df["date"].unique()),
+        "n_trading_days": n_days,
         "tickers":        tickers,
         "ticker_returns": sorted(ticker_returns, key=lambda x: x["return"] or 0, reverse=True),
         "portfolio_return": round(port_return, 4) if port_return is not None else None,

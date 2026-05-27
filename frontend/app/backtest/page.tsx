@@ -232,8 +232,8 @@ function LivePanel({ perf, loading, hasPortfolio }: {
         <span>
           <strong>Forward performance only — not a backtest.</strong>{" "}
           Equal-weight top-10 selection from discovery run on {perf.runDate}.
+          Entry prices taken on {(perf as any).entryDate ?? perf.runDate}.
           Data through {perf.dataThrough} ({perf.nTradingDays} trading days).
-          {perf.disclaimer && ` ${perf.disclaimer}`}
         </span>
       </div>
 
