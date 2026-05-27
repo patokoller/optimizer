@@ -69,6 +69,24 @@ INSTITUTIONAL HOLDINGS HEURISTIC:
 - High # of holders with rising concentration: institutional conviction building
 - Hedge fund dominance: tactical/shorter-term view; mutual fund dominance: longer-term thesis
 
+SEC COMMENT LETTERS HEURISTIC:
+- UPLOAD filing (SEC questioning): elevated accounting risk — treat as significant negative
+- Multiple rounds of correspondence: SEC not satisfied — strong negative signal
+- Topics: revenue recognition, goodwill, going concern = highest severity
+- No correspondence in 2 years: positive signal (clean regulatory relationship)
+
+LANGUAGE DRIFT HEURISTIC:
+- DETERIORATING trend: rising hedging + falling specificity across 6+ quarters → bearish
+- IMPROVING trend: falling hedging + rising specificity → bullish forward guidance quality
+- Q&A divergence > 1.5: management is MORE cautious in Q&A than in prepared remarks
+  This means analysts are extracting information management didn't volunteer — red flag
+
+SHORT INTEREST HEURISTIC:
+- Days-to-cover > 10 + high Claude score: market disagrees — investigate thesis carefully
+- Days-to-cover > 10 + rising stock: potential short squeeze setup
+- Short interest rising while price rising: building contrarian pressure
+- Short interest falling: shorts losing conviction, covering — mild bullish signal
+
 Return ONLY valid JSON with this exact structure:
 {{
   "score": <float 0.0–1.0, where 1.0 = strongest conviction buy, 0.0 = strongest conviction sell>,
@@ -108,8 +126,19 @@ PERIOD: {period} ({frequency})
 --- INSTITUTIONAL HOLDINGS (latest 13F filings) ---
 {institutional_context}
 
+--- SEC COMMENT LETTERS / CORRESPONDENCE ---
+{comment_letters_context}
+
+--- MANAGEMENT LANGUAGE DRIFT (8-quarter trend) ---
+{language_drift_context}
+
+--- SHORT INTEREST (FINRA) ---
+{short_interest_context}
+
 --- RECENT NEWS & SENTIMENT ---
 {news_context}
+
+{concentration_instruction}
 """
 
 
@@ -153,20 +182,28 @@ class LLMScorer:
         cash_flow_context: str = "",
         insider_context: str = "",
         institutional_context: str = "",
+        # Phase D
+        comment_letters_context: str = "",
+        language_drift_context: str = "",
+        short_interest_context: str = "",
+        concentration_instruction: str = "",
     ) -> Optional[dict]:
         """
-        Call Claude API with full enriched context (Phases A + B + C).
+        Call Claude API with full enriched context (Phases A + B + C + D).
 
         Token budget (200K context window):
           - Company overview:       up to  5K chars
-          - SEC filings:            up to 55K chars
-          - Earnings transcript:    up to 35K chars
+          - SEC filings:            up to 45K chars
+          - Earnings transcript:    up to 30K chars
           - Earnings history:       up to  3K chars
           - Balance sheet:          up to  5K chars
           - Cash flow:              up to  5K chars
-          - Insider transactions:   up to  4K chars
-          - Institutional holdings: up to  4K chars
-          - News:                   up to  8K chars
+          - Insider:                up to  4K chars
+          - Institutional:          up to  4K chars
+          - Comment letters:        up to  6K chars  ← Phase D
+          - Language drift:         up to  4K chars  ← Phase D
+          - Short interest:         up to  2K chars  ← Phase D
+          - News:                   up to  6K chars
         """
         if self.client is None:
             logger.warning(f"LLM scorer not initialized — skipping {ticker}")
@@ -178,14 +215,18 @@ class LLMScorer:
             frequency=frequency,
             period=period,
             overview_context=overview_context[:5_000],
-            filing_context=filing_context[:55_000],
-            earnings_context=earnings_context[:35_000],
+            filing_context=filing_context[:45_000],
+            earnings_context=earnings_context[:30_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],
             insider_context=insider_context[:4_000],
             institutional_context=institutional_context[:4_000],
-            news_context=news_context[:8_000],
+            comment_letters_context=comment_letters_context[:6_000],
+            language_drift_context=language_drift_context[:4_000],
+            short_interest_context=short_interest_context[:2_000],
+            news_context=news_context[:6_000],
+            concentration_instruction=concentration_instruction[:1_000],
         )
 
         try:

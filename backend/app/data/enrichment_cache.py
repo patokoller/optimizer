@@ -26,17 +26,27 @@ logger = logging.getLogger("enrichment_cache")
 
 # Signals that are slow-changing and safe to cache for a full month
 CACHEABLE_KEYS = {
+    # Phase A
     "transcript",
+    "transcript_qa_split",
     "earnings_history",
+    # Phase B
     "overview",
     "balance_sheet",
     "cash_flow",
+    # Phase C
     "insider",
     "institutional",
+    # Phase D (slow — cached monthly)
+    "comment_letters",
+    "language_drift",
+    # short_interest and concentration_instruction not cached:
+    # short_interest refreshes every 2 weeks (FINRA schedule)
+    # concentration_instruction is a static string
 }
 
 # Signal that must be re-fetched every run (time-sensitive)
-REALTIME_KEYS = {"news"}
+REALTIME_KEYS = {"news", "short_interest", "concentration_instruction"}
 
 
 def _cache_month() -> str:
@@ -92,6 +102,7 @@ def get_or_fetch(
     db: Session,
     ticker: str,
     av_client,
+    edgar_client=None,
     cache_bust: bool = False,
 ) -> dict:
     """
@@ -114,15 +125,23 @@ def get_or_fetch(
     cached = None if cache_bust else get_cached(db, ticker, month)
 
     if cached:
-        # Cache hit — only fetch news fresh
-        news = av_client.get_news_sentiment(ticker)
+        # Cache hit — fetch realtime signals fresh (news + short interest)
+        from app.data.phase_d import get_short_interest, get_concentration_instruction
+        news           = av_client.get_news_sentiment(ticker)
         time.sleep(1.0)
-        logger.info(f"Cache HIT {ticker} ({month}) — fetched news only")
-        return {**cached, "news": news}
+        short_interest = get_short_interest(ticker)
+        concentration  = get_concentration_instruction()
+        logger.info(f"Cache HIT {ticker} ({month}) — fetched realtime signals only")
+        return {
+            **cached,
+            "news":                    news,
+            "short_interest":          short_interest,
+            "concentration_instruction": concentration,
+        }
 
     # Cache miss — fetch all signals
     logger.info(f"Cache MISS {ticker} ({month}) — fetching all signals")
-    full_ctx = av_client.get_enriched_llm_context(ticker)
+    full_ctx = av_client.get_enriched_llm_context(ticker, edgar_client=edgar_client)
 
     # Persist the slow signals
     set_cached(db, ticker, full_ctx, month)

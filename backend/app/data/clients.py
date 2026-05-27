@@ -432,27 +432,38 @@ class AlphaVantageClient:
             logger_av.debug(f"Earnings history fetch failed {ticker}: {e}")
             return ""
 
-    def get_earnings_transcript(self, ticker: str, quarters: int = 2) -> str:
+    def get_earnings_transcript(
+        self,
+        ticker: str,
+        quarters: int = 2,
+        specific_quarters: list[str] | None = None,
+    ) -> str:
         """
-        Fetch the most recent earnings call transcript(s) via AV EARNINGS_CALL_TRANSCRIPT.
+        Fetch earnings call transcript(s) via AV EARNINGS_CALL_TRANSCRIPT.
 
-        Correct parameter format: quarter=2025Q1 (not year + quarter separately).
-        Returns a formatted string for Claude's earnings_context slot.
+        Args:
+            quarters:          Number of most-recent quarters to fetch (default 2)
+            specific_quarters: If provided, fetch exactly these quarters instead
+                               e.g. ["2024Q1", "2023Q4"] for language drift analysis
+
+        Returns formatted string for Claude's earnings_context slot.
         """
         if not self.api_key:
             return ""
 
         texts = []
-        now = datetime.utcnow()
-        # Build quarter strings in format "2025Q1", "2024Q4", etc.
-        y, q = now.year, (now.month - 1) // 3 + 1
-        periods = []
-        for _ in range(quarters):
-            periods.append(f"{y}Q{q}")
-            q -= 1
-            if q == 0:
-                q = 4
-                y -= 1
+        if specific_quarters:
+            periods = specific_quarters
+        else:
+            now = datetime.utcnow()
+            y, q = now.year, (now.month - 1) // 3 + 1
+            periods = []
+            for _ in range(quarters):
+                periods.append(f"{y}Q{q}")
+                q -= 1
+                if q == 0:
+                    q = 4
+                    y -= 1
 
         for quarter_str in periods:
             try:
@@ -501,43 +512,104 @@ class AlphaVantageClient:
     def get_enriched_llm_context(
         self,
         ticker: str,
+        edgar_client=None,
         delay_sec: float = 1.0,
     ) -> dict[str, str]:
         """
-        Fetch Phase A + B + C enrichment signals for Claude LLM scoring.
+        Fetch Phase A + B + C + D enrichment signals for Claude LLM scoring.
 
         Phase A: earnings transcript, news sentiment, EPS surprise history
         Phase B: company overview (valuation + analyst target), balance sheet, cash flow
         Phase C: insider transactions (Form 4), institutional holdings
+        Phase D: SEC comment letters, language drift (8-quarter), Q&A split, short interest
 
         Never raises — all failures return empty strings.
         """
+        from app.data.phase_d import (
+            get_sec_comment_letters,
+            compute_language_drift,
+            split_transcript_qa,
+            get_short_interest,
+            get_concentration_instruction,
+        )
+
+        # ── Phase A ───────────────────────────────────────────────────────
         transcript       = self.get_earnings_transcript(ticker)
         time.sleep(delay_sec)
         news             = self.get_news_sentiment(ticker)
         time.sleep(delay_sec)
         earnings_history = self.get_earnings_history(ticker)
         time.sleep(delay_sec)
-        overview         = self.get_company_overview(ticker)
+
+        # ── Phase B ───────────────────────────────────────────────────────
+        overview      = self.get_company_overview(ticker)
         time.sleep(delay_sec)
-        balance_sheet    = self.get_balance_sheet(ticker)
+        balance_sheet = self.get_balance_sheet(ticker)
         time.sleep(delay_sec)
-        cash_flow        = self.get_cash_flow(ticker)
-        time.sleep(delay_sec)
-        insider          = self.get_insider_transactions(ticker)
-        time.sleep(delay_sec)
-        institutional    = self.get_institutional_holdings(ticker)
+        cash_flow     = self.get_cash_flow(ticker)
         time.sleep(delay_sec)
 
+        # ── Phase C ───────────────────────────────────────────────────────
+        insider       = self.get_insider_transactions(ticker)
+        time.sleep(delay_sec)
+        institutional = self.get_institutional_holdings(ticker)
+        time.sleep(delay_sec)
+
+        # ── Phase D ───────────────────────────────────────────────────────
+        # SEC comment letters — from EDGAR (free, no rate limit)
+        comment_letters = ""
+        if edgar_client is not None:
+            try:
+                comment_letters = get_sec_comment_letters(ticker, edgar_client)
+            except Exception as e:
+                logger_av.debug(f"Phase D comment letters failed for {ticker}: {e}")
+        time.sleep(0.5)
+
+        # Language drift + Q&A split — 8-quarter transcript analysis
+        language_drift = ""
+        transcript_qa_split = ""
+        try:
+            language_drift = compute_language_drift(ticker, self, n_quarters=8)
+            # Also extract Q&A split from the most recent transcript for current-period use
+            if transcript:
+                prepared, qa = split_transcript_qa(transcript)
+                if qa:
+                    transcript_qa_split = (
+                        f"=== PREPARED REMARKS (most recent quarter) ===\n{prepared[:15_000]}\n\n"
+                        f"=== Q&A SESSION (most recent quarter) ===\n{qa[:10_000]}"
+                    )
+        except Exception as e:
+            logger_av.debug(f"Phase D language drift failed for {ticker}: {e}")
+        time.sleep(0.5)
+
+        # Short interest — FINRA (free, no auth)
+        short_interest = ""
+        try:
+            short_interest = get_short_interest(ticker)
+        except Exception as e:
+            logger_av.debug(f"Phase D short interest failed for {ticker}: {e}")
+
+        # Customer concentration — injected as instruction, not data fetch
+        concentration_instruction = get_concentration_instruction()
+
         return {
-            "transcript":       transcript,
-            "news":             news,
-            "earnings_history": earnings_history,
-            "overview":         overview,
-            "balance_sheet":    balance_sheet,
-            "cash_flow":        cash_flow,
-            "insider":          insider,
-            "institutional":    institutional,
+            # Phase A
+            "transcript":              transcript,
+            "transcript_qa_split":     transcript_qa_split,  # new: split version
+            "news":                    news,
+            "earnings_history":        earnings_history,
+            # Phase B
+            "overview":                overview,
+            "balance_sheet":           balance_sheet,
+            "cash_flow":               cash_flow,
+            # Phase C
+            "insider":                 insider,
+            "institutional":           institutional,
+            # Phase D
+            "comment_letters":         comment_letters,
+            "language_drift":          language_drift,
+            "short_interest":          short_interest,
+            "concentration_instruction": concentration_instruction,
         }
 
     # ── Phase B methods ────────────────────────────────────────────────────

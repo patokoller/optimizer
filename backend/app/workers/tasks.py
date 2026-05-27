@@ -179,7 +179,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         cache_hits = 0
         try:
             for ticker in tickers:
-                ctx_data = get_or_fetch(db, ticker, av)
+                ctx_data = get_or_fetch(db, ticker, av, edgar_client=edgar)
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
                     cached = bool(ctx_data.get("_from_cache"))
@@ -216,6 +216,10 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     cash_flow_context=enriched.get("cash_flow", ""),
                     insider_context=enriched.get("insider", ""),
                     institutional_context=enriched.get("institutional", ""),
+                    comment_letters_context=enriched.get("comment_letters", ""),
+                    language_drift_context=enriched.get("language_drift", ""),
+                    short_interest_context=enriched.get("short_interest", ""),
+                    concentration_instruction=enriched.get("concentration_instruction", ""),
                     news_context=enriched.get("news", ""),
                 )
                 if result is not None:
@@ -844,13 +848,14 @@ def run_discovery_job(self, discovery_run_id: str):
         cache_hits = 0
         try:
             for ticker in clean_tickers:
-                ctx_data = get_or_fetch(db, ticker, av)
+                ctx_data = get_or_fetch(db, ticker, av, edgar_client=edgar)
                 enriched_contexts[ticker] = ctx_data
                 if any(ctx_data.values()):
                     logger.info(
-                        f"Discovery enrichment {ticker}: transcript={bool(ctx_data['transcript'])}, news={bool(ctx_data['news'])}, "
-                        f"earnings={bool(ctx_data['earnings_history'])}, overview={bool(ctx_data['overview'])}, "
-                        f"insider={bool(ctx_data['insider'])}, institutional={bool(ctx_data['institutional'])}"
+                        f"Discovery enrichment {ticker}: transcript={bool(ctx_data.get('transcript'))}, "
+                        f"drift={bool(ctx_data.get('language_drift'))}, "
+                        f"comments={bool(ctx_data.get('comment_letters'))}, "
+                        f"short={bool(ctx_data.get('short_interest'))}"
                     )
             stats = cache_stats(db)
             logger.info(f"Discovery cache: {cache_hits}/{len(clean_tickers)} hits this run | {stats}")
@@ -878,6 +883,10 @@ def run_discovery_job(self, discovery_run_id: str):
                 cash_flow_context=enriched.get("cash_flow", ""),
                 insider_context=enriched.get("insider", ""),
                 institutional_context=enriched.get("institutional", ""),
+                comment_letters_context=enriched.get("comment_letters", ""),
+                language_drift_context=enriched.get("language_drift", ""),
+                short_interest_context=enriched.get("short_interest", ""),
+                concentration_instruction=enriched.get("concentration_instruction", ""),
                 news_context=enriched.get("news", ""),
             )
             if result is not None:
