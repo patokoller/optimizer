@@ -199,11 +199,13 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         llm_scores = {}
         if not llm_failed_global:
             from app.data.enrichment_cache import extract_company_name
+            # Build all prompts first, then submit as a single Batch API request (50% cost reduction)
+            prompts = {}
             for ticker in tickers:
                 ctx      = filing_contexts.get(ticker, "")
                 enriched = enriched_contexts.get(ticker, {})
                 company_name = extract_company_name(enriched.get("overview", ""), ticker)
-                result = llm_scorer.score(
+                prompts[ticker] = llm_scorer.build_prompt(
                     ticker=ticker,
                     company_name=company_name,
                     frequency=frequency,
@@ -222,13 +224,11 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     concentration_instruction=enriched.get("concentration_instruction", ""),
                     news_context=enriched.get("news", ""),
                 )
-                if result is not None:
-                    llm_scores[ticker] = result
-                    time.sleep(1.5)  # Throttle to avoid Claude 429 rate limits
-                else:
-                    llm_failed_global = True
-                    warnings_list.append(f"LLM_SCORE_FAILED: {ticker} — Claude API unavailable")
-                    break
+            logger.info(f"Submitting LLM batch: {len(prompts)} tickers")
+            llm_scores = llm_scorer.score_batch(prompts)
+            if not llm_scores:
+                llm_failed_global = True
+                warnings_list.append("LLM_SCORE_FAILED: Batch API returned no results")
 
         # ── Step 6: FRED macro snapshot + regime classification ───
         from app.data.fred_client import FREDClient
@@ -866,11 +866,13 @@ def run_discovery_job(self, discovery_run_id: str):
         llm_scorer = LLMScorer()
         llm_scores = {}
         from app.data.enrichment_cache import extract_company_name
+        # Build all prompts first, then submit as a single Batch API request (50% cost reduction)
+        prompts = {}
         for ticker in clean_tickers:
             ctx      = filing_contexts.get(ticker, "")
             enriched = enriched_contexts.get(ticker, {})
             company_name = extract_company_name(enriched.get("overview", ""), ticker)
-            result = llm_scorer.score(
+            prompts[ticker] = llm_scorer.build_prompt(
                 ticker=ticker,
                 company_name=company_name,
                 frequency=frequency,
@@ -889,9 +891,10 @@ def run_discovery_job(self, discovery_run_id: str):
                 concentration_instruction=enriched.get("concentration_instruction", ""),
                 news_context=enriched.get("news", ""),
             )
-            if result is not None:
-                llm_scores[ticker] = result
-                time.sleep(1.5)  # Throttle to avoid Claude 429 rate limits
+        logger.info(f"Submitting LLM batch: {len(prompts)} tickers")
+        llm_scores = llm_scorer.score_batch(prompts)
+        if not llm_scores:
+            logger.warning("LLM batch returned no results — scores will use w=1.0 fallback")
 
         # ── Macro regime ───────────────────────────────────────────
         from app.data.fred_client import FREDClient
