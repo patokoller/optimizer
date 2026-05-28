@@ -565,22 +565,11 @@ class AlphaVantageClient:
                 logger_av.debug(f"Phase D comment letters failed for {ticker}: {e}")
         time.sleep(0.5)
 
-        # Language drift + Q&A split — 8-quarter transcript analysis
-        language_drift = ""
+        # Language drift + Q&A split are managed by the enrichment_cache layer
+        # (get_or_fetch_drift with quarterly TTL; _make_qa_split from cached transcript).
+        # Populated empty here — the cache layer fills them after this call returns.
+        language_drift      = ""
         transcript_qa_split = ""
-        try:
-            language_drift = compute_language_drift(ticker, self, n_quarters=8)
-            # Also extract Q&A split from the most recent transcript for current-period use
-            if transcript:
-                prepared, qa = split_transcript_qa(transcript)
-                if qa:
-                    transcript_qa_split = (
-                        f"=== PREPARED REMARKS (most recent quarter) ===\n{prepared[:15_000]}\n\n"
-                        f"=== Q&A SESSION (most recent quarter) ===\n{qa[:10_000]}"
-                    )
-        except Exception as e:
-            logger_av.debug(f"Phase D language drift failed for {ticker}: {e}")
-        time.sleep(0.5)
 
         # Short interest — FINRA (free, no auth)
         short_interest = ""

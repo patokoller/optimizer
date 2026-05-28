@@ -111,6 +111,9 @@ PERIOD: {period} ({frequency})
 --- EARNINGS CALL TRANSCRIPT ---
 {earnings_context}
 
+--- EARNINGS CALL — PREPARED REMARKS vs Q&A SPLIT (most recent quarter) ---
+{transcript_qa_split_context}
+
 --- EARNINGS SURPRISE HISTORY ---
 {earnings_history_context}
 
@@ -182,6 +185,7 @@ class LLMScorer:
         cash_flow_context: str = "",
         insider_context: str = "",
         institutional_context: str = "",
+        transcript_qa_split_context: str = "",
         # Phase D
         comment_letters_context: str = "",
         language_drift_context: str = "",
@@ -217,6 +221,7 @@ class LLMScorer:
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
             earnings_context=earnings_context[:15_000],   # ← 30K→15K (Option G)
+            transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],
@@ -275,6 +280,7 @@ class LLMScorer:
         cash_flow_context: str = "",
         insider_context: str = "",
         institutional_context: str = "",
+        transcript_qa_split_context: str = "",
         comment_letters_context: str = "",
         language_drift_context: str = "",
         short_interest_context: str = "",
@@ -289,6 +295,7 @@ class LLMScorer:
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
             earnings_context=earnings_context[:15_000],
+            transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],

@@ -55,6 +55,20 @@ def _cache_month() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
+def _cache_quarter() -> str:
+    """Current calendar quarter as YYYY-QN (e.g. '2026-Q2').
+
+    Used as cache key for language drift — drift is computed from 8 quarters
+    of transcript history and only becomes stale when a new quarter begins.
+    Storing with a quarterly key means we only recompute 4×/year instead of
+    12×/year, saving ~588 AV transcript calls annually.
+    """
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    q = (now.month - 1) // 3 + 1
+    return f"{now.year}-Q{q}"
+
+
 def get_cached(db: Session, ticker: str, month: Optional[str] = None) -> Optional[dict]:
     """
     Return cached enrichment context for ticker in the given month.
@@ -99,6 +113,99 @@ def set_cached(db: Session, ticker: str, context: dict, month: Optional[str] = N
         db.rollback()
 
 
+# ── Quarterly drift cache helpers ─────────────────────────────────────────────
+# Language drift uses 8 quarters of transcript history and changes once per quarter.
+# We store it under a YYYY-QN key in the same enrichment_cache table so it is
+# only recomputed 4× per year (saving ~588 AV calls/year vs monthly recompute).
+
+def get_drift_cached(db: Session, ticker: str, quarter: Optional[str] = None) -> Optional[str]:
+    """Return cached language_drift string for the given quarter, or None on miss."""
+    quarter = quarter or _cache_quarter()
+    try:
+        row = db.execute(
+            text("SELECT context FROM enrichment_cache WHERE ticker = :t AND cache_month = :q"),
+            {"t": ticker, "q": quarter},
+        ).fetchone()
+        if row:
+            ctx = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            return ctx.get("language_drift", "") or None
+    except Exception as e:
+        logger.warning(f"Drift cache read failed for {ticker}: {e}")
+    return None
+
+
+def set_drift_cached(db: Session, ticker: str, drift_text: str, quarter: Optional[str] = None) -> None:
+    """Persist language_drift under a quarterly cache key."""
+    quarter = quarter or _cache_quarter()
+    try:
+        db.execute(
+            text("""
+                INSERT INTO enrichment_cache (ticker, cache_month, context, fetched_at)
+                VALUES (:t, :q, CAST(:ctx AS jsonb), now())
+                ON CONFLICT (ticker, cache_month)
+                DO UPDATE SET context = EXCLUDED.context, fetched_at = now()
+            """),
+            {"t": ticker, "q": quarter, "ctx": json.dumps({"language_drift": drift_text})},
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Drift cache write failed for {ticker}: {e}")
+        db.rollback()
+
+
+def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
+    """
+    Return language drift analysis for ticker, using quarterly cache.
+
+    Cache miss → calls compute_language_drift() (8 AV transcript calls, ~15s).
+    Cache hit  → returns instantly from DB.
+
+    Called once per ticker per quarter; all 12 monthly runs within a quarter
+    after the first will hit the cache at no cost.
+    """
+    from app.data.phase_d import compute_language_drift
+    quarter = _cache_quarter()
+
+    cached = get_drift_cached(db, ticker, quarter)
+    if cached:
+        logger.debug(f"Drift cache HIT {ticker} ({quarter})")
+        return cached
+
+    logger.info(f"Drift cache MISS {ticker} ({quarter}) — computing language drift")
+    try:
+        drift = compute_language_drift(ticker, av_client, n_quarters=8)
+    except Exception as e:
+        logger.warning(f"Language drift failed for {ticker}: {e}")
+        drift = ""
+
+    if drift:
+        set_drift_cached(db, ticker, drift, quarter)
+        logger.info(f"Drift cached {ticker} ({quarter}) — {len(drift)} chars")
+
+    return drift
+
+
+def _make_qa_split(transcript: str) -> str:
+    """
+    Split the most recent transcript into prepared remarks + Q&A sections.
+    Returns a formatted string for the prompt, or '' if no Q&A found.
+    Zero AV calls — derived from the already-cached transcript.
+    """
+    if not transcript:
+        return ""
+    from app.data.phase_d import split_transcript_qa
+    try:
+        prepared, qa = split_transcript_qa(transcript)
+        if not qa:
+            return ""
+        return (
+            f"=== PREPARED REMARKS (most recent quarter) ===\n{prepared[:12_000]}\n\n"
+            f"=== Q&A SESSION (most recent quarter) ===\n{qa[:8_000]}"
+        )
+    except Exception:
+        return ""
+
+
 def get_or_fetch(
     db: Session,
     ticker: str,
@@ -109,42 +216,55 @@ def get_or_fetch(
     """
     Main entry point. Returns full enrichment context for a ticker.
 
-    1. Check cache for slow signals (transcript, overview, balance sheet, etc.)
-    2. Always fetch news fresh (time-sensitive)
-    3. If cache miss (or cache_bust=True), fetch all slow signals from AV and cache them
-    4. Merge cached slow signals + fresh news and return
+    Monthly cache (YYYY-MM):  transcript, overview, balance sheet, cash flow,
+                              insider, institutional, comment letters, QA split
+    Quarterly cache (YYYY-QN): language drift (8-quarter history, expensive)
+    Realtime (every run):     news, short interest, concentration instruction
 
-    Args:
-        db:          SQLAlchemy session
-        ticker:      Stock ticker
-        av_client:   AlphaVantageClient instance
-        cache_bust:  Force re-fetch even if cache is warm (use after earnings release)
+    Language drift is fetched via get_or_fetch_drift() which maintains its own
+    quarterly cache — it is always populated regardless of monthly cache state.
+    QA split is derived from the cached transcript at zero extra API cost.
     """
     import time
 
-    month = _cache_month()
-    cached = None if cache_bust else get_cached(db, ticker, month)
+    month   = _cache_month()
+    cached  = None if cache_bust else get_cached(db, ticker, month)
 
     if cached:
-        # Cache hit — fetch realtime signals fresh (news + short interest)
+        # Monthly cache hit — fetch realtime signals + quarterly drift
         from app.data.phase_d import get_short_interest, get_concentration_instruction
         news           = av_client.get_news_sentiment(ticker)
         time.sleep(1.0)
-        short_interest = get_short_interest(ticker)
-        concentration  = get_concentration_instruction()
-        logger.info(f"Cache HIT {ticker} ({month}) — fetched realtime signals only")
+        short_interest  = get_short_interest(ticker)
+        concentration   = get_concentration_instruction()
+        language_drift  = get_or_fetch_drift(db, ticker, av_client)
+        # QA split from cached transcript — zero extra calls
+        transcript_qa_split = _make_qa_split(cached.get("transcript", ""))
+        logger.info(
+            f"Cache HIT {ticker} ({month}) — fetched realtime signals only"
+            f" | drift={'yes' if language_drift else 'no'}"
+            f" | qa_split={'yes' if transcript_qa_split else 'no'}"
+        )
         return {
             **cached,
-            "news":                    news,
-            "short_interest":          short_interest,
+            "language_drift":            language_drift,
+            "transcript_qa_split":       transcript_qa_split,
+            "news":                      news,
+            "short_interest":            short_interest,
             "concentration_instruction": concentration,
         }
 
-    # Cache miss — fetch all signals
+    # Monthly cache miss — fetch all slow signals
     logger.info(f"Cache MISS {ticker} ({month}) — fetching all signals")
     full_ctx = av_client.get_enriched_llm_context(ticker, edgar_client=edgar_client)
 
-    # Persist the slow signals
+    # QA split from freshly-fetched transcript
+    full_ctx["transcript_qa_split"] = _make_qa_split(full_ctx.get("transcript", ""))
+
+    # Language drift via quarterly cache (may be a cache hit even on monthly miss)
+    full_ctx["language_drift"] = get_or_fetch_drift(db, ticker, av_client)
+
+    # Persist the slow monthly signals (drift stored separately under quarterly key)
     set_cached(db, ticker, full_ctx, month)
 
     return full_ctx
