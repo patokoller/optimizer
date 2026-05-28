@@ -37,7 +37,7 @@ alpaca-py==0.20.0
 requests==2.32.3
 
 # ── Anthropic (LLM scoring) ────────────────────────────────────────────
-anthropic==0.28.0
+anthropic>=0.90.0
 
 # ── Utilities ─────────────────────────────────────────────────────────
 python-dotenv==1.0.1
