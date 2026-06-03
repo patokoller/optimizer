@@ -121,6 +121,41 @@ class AlphaVantageError(Exception):
     pass
 
 
+class AlphaVantageSoftFailure(Exception):
+    """Raised when AV returns a soft-failure envelope (rate-limit / premium gate)
+    rather than data. Distinct from AlphaVantageError (transport/real failure)
+    and from a legitimately empty result, so callers can tell "AV throttled us"
+    (transient — back off and retry) apart from "this ticker has no data"
+    (skip) apart from "the request broke" (error). Carries .reason."""
+    def __init__(self, reason: str, detail: str = ""):
+        self.reason = reason          # "rate_limit" | "premium_gate"
+        self.detail = detail
+        super().__init__(f"AV soft failure ({reason}): {detail}"[:200])
+
+
+def _classify_av_response(data: dict) -> tuple[str | None, str]:
+    """Classify an AV JSON body. Returns (kind, message).
+
+    kind is one of: None (looks like real data), "rate_limit", "premium_gate",
+    "error". AV signals throttling via an "Information"/"Note" string, premium
+    gating via "Information" mentioning a premium plan, and hard errors via
+    "Error Message". These all come back HTTP 200 with an empty-looking body,
+    which is why they are so easy to mistake for "no data".
+    """
+    if not isinstance(data, dict):
+        return None, ""
+    if "Error Message" in data:
+        return "error", str(data["Error Message"])[:200]
+    msg = data.get("Information") or data.get("Note")
+    if msg:
+        low = str(msg).lower()
+        if "premium" in low or "subscribe" in low or "thank you for using" in low and "premium" in low:
+            return "premium_gate", str(msg)[:200]
+        # rate-limit / throttle language ("call frequency", "per minute/day", "limit")
+        return "rate_limit", str(msg)[:200]
+    return None, ""
+
+
 def _safe_float(val) -> float:
     """Convert AV field to float — handles None, 'None', '', and missing."""
     if val is None or val == "None" or val == "":
@@ -136,6 +171,7 @@ class AlphaVantageClient:
 
     def __init__(self):
         self.api_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
+        self._throttle_count = 0   # soft-failures seen this client's lifetime
         if not self.api_key:
             logger_av.warning("ALPHA_VANTAGE_API_KEY not set — fundamental data unavailable.")
 
@@ -161,9 +197,19 @@ class AlphaVantageClient:
                 resp.raise_for_status()
                 data = resp.json()
 
+                kind, msg = _classify_av_response(data)
+                if kind in ("rate_limit", "premium_gate"):
+                    self._throttle_count += 1
+                    raise AlphaVantageSoftFailure(kind, msg)
+                if kind == "error":
+                    raise AlphaVantageError(f"Alpha Vantage error for {ticker}: {msg}")
                 if "quarterlyReports" not in data:
-                    error_msg = data.get("Note") or data.get("Information") or "Unknown error"
-                    raise AlphaVantageError(f"Alpha Vantage error for {ticker}: {error_msg}")
+                    # Legitimately no statement data for this ticker — not a failure.
+                    logger_av.info(f"AV: no quarterlyReports for {ticker} (treating as empty)")
+                    return pd.DataFrame(columns=[
+                        "ticker", "period_date", "revenue", "operating_income",
+                        "net_income", "operating_margin", "net_margin",
+                    ])
 
                 rows = []
                 for q in data["quarterlyReports"]:
@@ -185,7 +231,7 @@ class AlphaVantageClient:
                 df = pd.DataFrame(rows)
                 return df.sort_values("period_date")
 
-            except AlphaVantageError:
+            except (AlphaVantageError, AlphaVantageSoftFailure):
                 raise
             except Exception as e:
                 if attempt == 0:
@@ -199,23 +245,61 @@ class AlphaVantageClient:
         self,
         tickers: list[str],
         delay_sec: float = 12.0,
+        throttle_backoff_sec: float = 60.0,
+        max_throttle_retries: int = 2,
     ) -> pd.DataFrame:
         """
         Fetch quarterly fundamentals for all tickers.
-        Applies a delay between requests to respect free-tier rate limits.
+
+        On a soft failure (AV throttle / rate-limit) a ticker is NOT silently
+        dropped — it is retried after a backoff up to max_throttle_retries times,
+        because a throttle is transient and dropping it silently degrades
+        fundamental coverage while the run still looks healthy. Genuine failures
+        and legitimately-empty tickers are skipped. A coverage tally is logged so
+        throttling is visible rather than hidden.
         """
         frames = []
+        fetched = throttled_recovered = dropped_throttle = failed = empty = 0
         for ticker in tickers:
-            try:
-                df = self.get_income_statement(ticker)
-                frames.append(df)
-                logger_av.info(f"Alpha Vantage: fetched {ticker} ({len(df)} quarters)")
-            except AlphaVantageError as e:
-                logger_av.warning(f"Skipping {ticker}: {e}")
+            for attempt in range(max_throttle_retries + 1):
+                try:
+                    df = self.get_income_statement(ticker)
+                    if df is None or len(df) == 0:
+                        empty += 1
+                    else:
+                        frames.append(df)
+                        fetched += 1
+                        if attempt > 0:
+                            throttled_recovered += 1
+                    break
+                except AlphaVantageSoftFailure as e:
+                    if attempt < max_throttle_retries:
+                        logger_av.warning(
+                            f"AV throttled on {ticker} ({e.reason}); backing off "
+                            f"{throttle_backoff_sec:.0f}s (retry {attempt + 1}/{max_throttle_retries})"
+                        )
+                        time.sleep(throttle_backoff_sec)
+                        continue
+                    dropped_throttle += 1
+                    logger_av.warning(f"AV still throttled on {ticker} after "
+                                      f"{max_throttle_retries} retries — dropping this ticker")
+                    break
+                except AlphaVantageError as e:
+                    failed += 1
+                    logger_av.warning(f"Skipping {ticker}: {e}")
+                    break
             time.sleep(delay_sec)  # AV free tier: 5 calls/min
 
+        logger_av.info(
+            f"AV fundamentals coverage: fetched={fetched} "
+            f"throttled_recovered={throttled_recovered} dropped_throttle={dropped_throttle} "
+            f"failed={failed} empty={empty} | total throttles seen={self._throttle_count}"
+        )
         if not frames:
-            raise AlphaVantageError("No fundamental data fetched")
+            raise AlphaVantageError(
+                f"No fundamental data fetched (dropped_throttle={dropped_throttle}, "
+                f"failed={failed}, empty={empty}) — likely AV throttling, not missing data"
+            )
         return pd.concat(frames, ignore_index=True)
 
     def get_earnings_transcript(self, ticker: str, quarters: int = 2) -> str:
@@ -618,8 +702,19 @@ class AlphaVantageClient:
             )
             resp.raise_for_status()
             data = resp.json()
-            if "Information" in data or "Note" in data:
-                logger_av.debug(f"AV rate limit for {params.get('symbol', '?')}: {params.get('function')}")
+            kind, msg = _classify_av_response(data)
+            if kind in ("rate_limit", "premium_gate"):
+                self._throttle_count += 1
+                logger_av.warning(
+                    f"AV {kind} on {params.get('function')} for "
+                    f"{params.get('symbol', '?')}: {msg[:120]}"
+                )
+                return None
+            if kind == "error":
+                logger_av.warning(
+                    f"AV error on {params.get('function')} for "
+                    f"{params.get('symbol', '?')}: {msg[:120]}"
+                )
                 return None
             return data
         except Exception as e:
