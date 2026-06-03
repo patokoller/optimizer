@@ -237,7 +237,7 @@ class LLMScorer:
         try:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=400,   # JSON output is ~200-350 tokens; was 1024
+                max_tokens=800,   # key_positives/key_risks strings can hit 600+ tokens; 400 was too low
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,  # Low temperature for consistent financial scoring
             )
@@ -339,7 +339,7 @@ class LLMScorer:
                 "custom_id": ticker,
                 "params": {
                     "model": self.model,
-                    "max_tokens": 400,
+                    "max_tokens": 800,
                     "temperature": 0.1,
                     "messages": [{"role": "user", "content": prompt}],
                 },
