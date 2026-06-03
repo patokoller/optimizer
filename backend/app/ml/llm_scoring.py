@@ -74,19 +74,7 @@ SEC COMMENT LETTERS HEURISTIC:
 - Multiple rounds of correspondence: SEC not satisfied — strong negative signal
 - Topics: revenue recognition, goodwill, going concern = highest severity
 - No correspondence in 2 years: positive signal (clean regulatory relationship)
-
-LANGUAGE DRIFT HEURISTIC:
-- DETERIORATING trend: rising hedging + falling specificity across 6+ quarters → bearish
-- IMPROVING trend: falling hedging + rising specificity → bullish forward guidance quality
-- Q&A divergence > 1.5: management is MORE cautious in Q&A than in prepared remarks
-  This means analysts are extracting information management didn't volunteer — red flag
-
-SHORT INTEREST HEURISTIC:
-- Days-to-cover > 10 + high Claude score: market disagrees — investigate thesis carefully
-- Days-to-cover > 10 + rising stock: potential short squeeze setup
-- Short interest rising while price rising: building contrarian pressure
-- Short interest falling: shorts losing conviction, covering — mild bullish signal
-
+{optional_signal_heuristics}
 Return ONLY valid JSON with this exact structure:
 {{
   "score": <float 0.0–1.0, where 1.0 = strongest conviction buy, 0.0 = strongest conviction sell>,
@@ -131,18 +119,45 @@ PERIOD: {period} ({frequency})
 
 --- SEC COMMENT LETTERS / CORRESPONDENCE ---
 {comment_letters_context}
-
---- MANAGEMENT LANGUAGE DRIFT (8-quarter trend) ---
-{language_drift_context}
-
---- SHORT INTEREST (FINRA) ---
-{short_interest_context}
-
+{optional_signals_block}
 --- RECENT NEWS & SENTIMENT ---
 {news_context}
 
 {concentration_instruction}
 """
+
+
+def _build_optional_signals(language_drift_context: str = "",
+                            short_interest_context: str = "") -> tuple[str, str]:
+    """Assemble the language-drift / short-interest fragments only when data is
+    present. Returns (heuristics, data_block); both empty when neither signal
+    has data, so dead labeled sections and their instructions never ship.
+    Drift and short interest are frequently unavailable, and an empty labeled
+    section plus its heuristic is wasted tokens that can dilute attention."""
+    drift = (language_drift_context or "").strip()
+    short = (short_interest_context or "").strip()
+    heur_parts, data_parts = [], []
+    if drift:
+        heur_parts.append(
+            "LANGUAGE DRIFT HEURISTIC:\n"
+            "- DETERIORATING trend: rising hedging + falling specificity across 6+ quarters → bearish\n"
+            "- IMPROVING trend: falling hedging + rising specificity → bullish forward guidance quality\n"
+            "- Q&A divergence > 1.5: management is MORE cautious in Q&A than in prepared remarks\n"
+            "  This means analysts are extracting information management didn't volunteer — red flag"
+        )
+        data_parts.append("--- MANAGEMENT LANGUAGE DRIFT (8-quarter trend) ---\n" + drift[:4_000])
+    if short:
+        heur_parts.append(
+            "SHORT INTEREST HEURISTIC:\n"
+            "- Days-to-cover > 10 + high Claude score: market disagrees — investigate thesis carefully\n"
+            "- Days-to-cover > 10 + rising stock: potential short squeeze setup\n"
+            "- Short interest rising while price rising: building contrarian pressure\n"
+            "- Short interest falling: shorts losing conviction, covering — mild bullish signal"
+        )
+        data_parts.append("--- SHORT INTEREST (FINRA) ---\n" + short[:2_000])
+    heuristics = ("\n" + "\n\n".join(heur_parts) + "\n") if heur_parts else ""
+    block = ("\n" + "\n\n".join(data_parts) + "\n") if data_parts else ""
+    return heuristics, block
 
 
 class LLMScoringError(Exception):
@@ -213,6 +228,7 @@ class LLMScorer:
             logger.warning(f"LLM scorer not initialized — skipping {ticker}")
             return None
 
+        _osh, _osb = _build_optional_signals(language_drift_context, short_interest_context)
         prompt = SCORE_PROMPT_TEMPLATE.format(
             ticker=ticker,
             company_name=company_name,
@@ -228,8 +244,8 @@ class LLMScorer:
             insider_context=insider_context[:4_000],
             institutional_context=institutional_context[:4_000],
             comment_letters_context=comment_letters_context[:6_000],
-            language_drift_context=language_drift_context[:4_000],
-            short_interest_context=short_interest_context[:2_000],
+            optional_signal_heuristics=_osh,
+            optional_signals_block=_osb,
             news_context=news_context[:6_000],
             concentration_instruction=concentration_instruction[:1_000],
         )
@@ -287,6 +303,7 @@ class LLMScorer:
         concentration_instruction: str = "",
     ) -> str:
         """Build the formatted prompt string for a single ticker (used by score_batch)."""
+        _osh, _osb = _build_optional_signals(language_drift_context, short_interest_context)
         return SCORE_PROMPT_TEMPLATE.format(
             ticker=ticker,
             company_name=company_name,
@@ -302,8 +319,8 @@ class LLMScorer:
             insider_context=insider_context[:4_000],
             institutional_context=institutional_context[:4_000],
             comment_letters_context=comment_letters_context[:6_000],
-            language_drift_context=language_drift_context[:4_000],
-            short_interest_context=short_interest_context[:2_000],
+            optional_signal_heuristics=_osh,
+            optional_signals_block=_osb,
             news_context=news_context[:6_000],
             concentration_instruction=concentration_instruction[:1_000],
         )

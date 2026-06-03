@@ -303,6 +303,63 @@ class DiscoveryRun(Base):
                                     cascade="all, delete-orphan")
 
 
+class DiscoveryForwardReturn(Base):
+    """
+    Realized forward return for one ticker from one discovery run, used to
+    validate whether scores actually predicted subsequent returns.
+
+    Populated by the backfill task once enough trading days have elapsed
+    (21 trading days ≈ 1 month, 63 ≈ 1 quarter — matching the paper's horizons).
+    The score columns are snapshotted at scoring time so validation never
+    depends on the DiscoveryScore row still existing or being unchanged.
+    """
+    __tablename__ = "discovery_forward_returns"
+    id                = Column(String, primary_key=True, default=_uuid)
+    discovery_run_id  = Column(String, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    ticker            = Column(String(10), nullable=False, index=True)
+    run_date          = Column(DateTime, nullable=False)   # when the score was assigned
+
+    # Score snapshot at scoring time (the predictors we are validating)
+    combined_score    = Column(Float)
+    technical_score   = Column(Float)
+    fundamental_score = Column(Float)
+    entropy_score     = Column(Float)
+    llm_score         = Column(Float)
+    rank              = Column(Integer)
+
+    # Realized forward returns (the target). NULL until matured + filled.
+    anchor_close      = Column(Float)   # adjusted close on/after run_date
+    fwd_return_21d    = Column(Float)
+    fwd_return_63d    = Column(Float)
+    filled_21d_at     = Column(DateTime)
+    filled_63d_at     = Column(DateTime)
+    created_at        = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__    = (UniqueConstraint("discovery_run_id", "ticker"),)
+
+
+class DiscoveryICMetric(Base):
+    """
+    Cross-sectional predictive power of one score column, for one discovery run,
+    at one horizon. rank_ic is Spearman correlation of score vs realized forward
+    return across the universe; topk_spread is the mean forward return of the
+    top-10 names by score minus the universe mean (the paper selects top-10).
+    One row per (run, horizon, score_column) — trend these over time to see
+    whether, and which, signals carry information.
+    """
+    __tablename__ = "discovery_ic_metrics"
+    id               = Column(String, primary_key=True, default=_uuid)
+    discovery_run_id = Column(String, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    run_date         = Column(DateTime, nullable=False)
+    horizon_days     = Column(Integer, nullable=False)   # 21 or 63
+    score_column     = Column(String, nullable=False)    # combined|technical|fundamental|entropy|llm
+    rank_ic          = Column(Float)                     # Spearman IC, may be NULL if degenerate
+    topk_spread      = Column(Float)                     # top-10 mean fwd return minus universe mean
+    universe_mean    = Column(Float)                     # equal-weight universe mean fwd return
+    n                = Column(Integer, nullable=False)   # tickers with both score and return
+    computed_at      = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__   = (UniqueConstraint("discovery_run_id", "horizon_days", "score_column"),)
+
+
 class DiscoveryScore(Base):
     """Score for a single NASDAQ-100 ticker within a discovery run."""
     __tablename__ = "discovery_scores"

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models
-from app.workers.tasks import run_discovery_job
+from app.workers.tasks import run_discovery_job, backfill_forward_returns
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 
@@ -95,6 +95,63 @@ def list_discovery_runs(limit: int = 10, db: Session = Depends(get_db)):
         .all()
     )
     return [_run_out(r) for r in runs]
+
+
+# ── Validation harness ─────────────────────────────────────────────────────
+
+@router.get("/validation")
+def get_validation(horizon: int = 21, score_column: str = "combined_score",
+                   limit: int = 24, db: Session = Depends(get_db)):
+    """Rank-IC time series for one horizon + score column, newest first.
+
+    horizon: 21 (monthly) or 63 (quarterly) trading days.
+    score_column: combined_score | technical_score | fundamental_score |
+                  entropy_score | llm_score
+    Returns per-run IC, top-10 spread, universe mean, and n, plus a simple
+    mean-IC summary across the returned window (the headline "is there signal").
+    """
+    q = (
+        db.query(models.DiscoveryICMetric)
+        .filter(
+            models.DiscoveryICMetric.horizon_days == horizon,
+            models.DiscoveryICMetric.score_column == score_column,
+        )
+        .order_by(models.DiscoveryICMetric.run_date.desc())
+        .limit(limit)
+    )
+    metrics = q.all()
+    series = [
+        {
+            "discovery_run_id": m.discovery_run_id,
+            "run_date":         m.run_date.isoformat() if m.run_date else None,
+            "rank_ic":          m.rank_ic,
+            "topk_spread":      m.topk_spread,
+            "universe_mean":    m.universe_mean,
+            "n":                m.n,
+            "computed_at":      m.computed_at.isoformat() if m.computed_at else None,
+        }
+        for m in metrics
+    ]
+    ics = [s["rank_ic"] for s in series if s["rank_ic"] is not None]
+    spreads = [s["topk_spread"] for s in series if s["topk_spread"] is not None]
+    summary = {
+        "horizon_days":  horizon,
+        "score_column":  score_column,
+        "runs_measured": len(series),
+        "mean_ic":       (sum(ics) / len(ics)) if ics else None,
+        "mean_topk_spread": (sum(spreads) / len(spreads)) if spreads else None,
+        "note": ("No matured runs yet — IC appears once a run is "
+                 f"{horizon} trading days old." if not series else None),
+    }
+    return {"summary": summary, "series": series}
+
+
+@router.post("/backfill")
+def trigger_backfill():
+    """Manually enqueue the forward-return backfill (also runs after each
+    discovery run). Idempotent — only fills matured, still-empty horizons."""
+    backfill_forward_returns.delay()
+    return {"status": "enqueued"}
 
 
 # ── Serialisers ────────────────────────────────────────────────────────────

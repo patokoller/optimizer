@@ -1098,11 +1098,191 @@ def run_discovery_job(self, discovery_run_id: str):
         db.commit()
         logger.info(f"Discovery run {discovery_run_id} complete — {len(clean_tickers)} tickers scored")
 
+        # Snapshot this run's scores for later validation, and opportunistically
+        # backfill/score any *prior* runs that have now matured. Never let this
+        # affect the discovery run's own success.
+        try:
+            _snapshot_forward_return_rows(db, discovery_run_id)
+            backfill_forward_returns.delay()
+        except Exception as snap_err:
+            logger.warning(f"Validation snapshot/enqueue skipped: {snap_err}")
+
     except Exception as e:
         logger.error(f"Discovery run {discovery_run_id} failed: {e}", exc_info=True)
         run.status = models.RunStatus.failed
         run.error_log = str(e)
         db.commit()
         raise e
+    finally:
+        db.close()
+
+
+# ── Score Validation Harness ───────────────────────────────────────────────
+# Measures whether discovery scores actually predicted forward returns.
+# Snapshot is written when a run completes; returns are filled once enough
+# trading days elapse; rank-IC is computed per run/horizon/score-column.
+
+# Calendar buffers before a horizon is considered matured (trading days have
+# slack from weekends/holidays: 21 td ≈ 31 cal days, 63 td ≈ 95 cal days).
+_MATURE_BUFFER_DAYS = {21: 35, 63: 95}
+_FETCH_TAIL_DAYS = 110   # how far past run_date to pull bars (covers 63 td + slack)
+
+
+def _snapshot_forward_return_rows(db, discovery_run_id: str):
+    """Create one DiscoveryForwardReturn row per scored ticker (idempotent).
+
+    Snapshots the score columns at scoring time so validation is independent of
+    later mutations to DiscoveryScore.
+    """
+    from app import models
+    run = db.query(models.DiscoveryRun).filter(
+        models.DiscoveryRun.id == discovery_run_id).first()
+    if not run:
+        return
+    existing = {
+        r.ticker for r in db.query(models.DiscoveryForwardReturn.ticker).filter(
+            models.DiscoveryForwardReturn.discovery_run_id == discovery_run_id).all()
+    }
+    scores = db.query(models.DiscoveryScore).filter(
+        models.DiscoveryScore.discovery_run_id == discovery_run_id).all()
+    added = 0
+    for s in scores:
+        if s.ticker in existing:
+            continue
+        db.add(models.DiscoveryForwardReturn(
+            discovery_run_id  = discovery_run_id,
+            ticker            = s.ticker,
+            run_date          = run.run_date,
+            combined_score    = s.combined_score,
+            technical_score   = s.technical_score,
+            fundamental_score = s.fundamental_score,
+            entropy_score     = s.entropy_score,
+            llm_score         = s.llm_score,
+            rank              = s.rank,
+        ))
+        added += 1
+    db.commit()
+    logger.info(f"Validation: snapshotted {added} forward-return rows for run {discovery_run_id}")
+
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=120)
+def backfill_forward_returns(self):
+    """Fill matured forward returns and compute rank-IC for every discovery run.
+
+    Idempotent and safe to run repeatedly: only fills horizons that have matured
+    and are still NULL, and upserts IC metrics. Pulls adjusted closes from Alpaca
+    for the [run_date, run_date+110d] window per run that still has work to do.
+    """
+    from datetime import datetime, timedelta
+    from app.database import SessionLocal
+    from app import models
+    from app.data.clients import AlpacaClient, AlpacaDataError
+    from app.ml.validation import (
+        forward_returns_from_bars, rank_ic, topk_spread,
+        SCORE_COLUMNS, HORIZONS,
+    )
+
+    db = SessionLocal()
+    now = datetime.utcnow()
+    filled_runs = 0
+    try:
+        # Runs with at least one unfilled-but-matured horizon
+        candidate_runs = db.query(models.DiscoveryRun).filter(
+            models.DiscoveryRun.status.in_([
+                models.RunStatus.complete,
+                models.RunStatus.complete_with_warnings,
+            ])
+        ).order_by(models.DiscoveryRun.run_date.desc()).all()
+
+        try:
+            alpaca = AlpacaClient()
+        except Exception as e:
+            logger.warning(f"Validation backfill: Alpaca unavailable ({e}); aborting")
+            return
+
+        for run in candidate_runs:
+            rows = db.query(models.DiscoveryForwardReturn).filter(
+                models.DiscoveryForwardReturn.discovery_run_id == run.id).all()
+            if not rows:
+                continue
+
+            # Which horizons are matured and still have NULLs to fill?
+            horizons_to_fill = []
+            for h in HORIZONS:
+                buf = _MATURE_BUFFER_DAYS[h]
+                matured = now >= run.run_date + timedelta(days=buf)
+                if not matured:
+                    continue
+                col = f"fwd_return_{h}d"
+                if any(getattr(r, col) is None for r in rows):
+                    horizons_to_fill.append(h)
+
+            need_prices = bool(horizons_to_fill)
+            # Also (re)compute IC for any matured horizon that lacks metrics
+            if not need_prices:
+                # still ensure IC exists for already-filled horizons
+                pass
+
+            if need_prices:
+                tickers = [r.ticker for r in rows]
+                start = run.run_date - timedelta(days=7)
+                end = min(now, run.run_date + timedelta(days=_FETCH_TAIL_DAYS))
+                try:
+                    bars = alpaca.get_ohlcv(tickers, start, end)
+                except AlpacaDataError as e:
+                    logger.warning(f"Validation backfill: price fetch failed for run {run.id}: {e}")
+                    continue
+                fwd = forward_returns_from_bars(bars, run.run_date)
+                for r in rows:
+                    rec = fwd.get(r.ticker)
+                    if not rec:
+                        continue
+                    if r.anchor_close is None and rec.get("anchor_close"):
+                        r.anchor_close = rec["anchor_close"]
+                    for h in horizons_to_fill:
+                        col = f"fwd_return_{h}d"
+                        val = rec.get(col)
+                        if getattr(r, col) is None and val is not None:
+                            setattr(r, col, val)
+                            setattr(r, f"filled_{h}d_at", now)
+                db.commit()
+                filled_runs += 1
+
+            # Recompute IC metrics for every matured horizon with data present
+            rows = db.query(models.DiscoveryForwardReturn).filter(
+                models.DiscoveryForwardReturn.discovery_run_id == run.id).all()
+            for h in HORIZONS:
+                if now < run.run_date + timedelta(days=_MATURE_BUFFER_DAYS[h]):
+                    continue
+                col = f"fwd_return_{h}d"
+                returns = [getattr(r, col) for r in rows]
+                if not any(v is not None for v in returns):
+                    continue
+                for sc_col in SCORE_COLUMNS:
+                    scores = [getattr(r, sc_col) for r in rows]
+                    ic, n = rank_ic(scores, returns)
+                    spread, uni = topk_spread(scores, returns)
+                    metric = db.query(models.DiscoveryICMetric).filter(
+                        models.DiscoveryICMetric.discovery_run_id == run.id,
+                        models.DiscoveryICMetric.horizon_days == h,
+                        models.DiscoveryICMetric.score_column == sc_col,
+                    ).first()
+                    if metric is None:
+                        metric = models.DiscoveryICMetric(
+                            discovery_run_id=run.id, run_date=run.run_date,
+                            horizon_days=h, score_column=sc_col, n=n,
+                        )
+                        db.add(metric)
+                    metric.rank_ic = ic
+                    metric.topk_spread = spread
+                    metric.universe_mean = uni
+                    metric.n = n
+                    metric.computed_at = now
+            db.commit()
+
+        logger.info(f"Validation backfill complete: priced {filled_runs} run(s), IC metrics refreshed")
+    except Exception as e:
+        logger.error(f"Validation backfill error: {e}", exc_info=True)
+        raise self.retry(exc=e)
     finally:
         db.close()
