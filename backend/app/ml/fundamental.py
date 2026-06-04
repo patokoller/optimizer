@@ -22,7 +22,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
@@ -55,20 +55,21 @@ def _make_models() -> dict:
     models = {
         "ridge": Pipeline([
             ("scaler", StandardScaler()),
-            ("model", Ridge(alpha=1.0)),
+            ("model", RidgeCV(alphas=[0.1, 1.0, 10.0])),
         ]),
         "rf": Pipeline([
             ("scaler", StandardScaler()),
-            ("model", RandomForestRegressor(n_estimators=200, max_depth=6, random_state=42, n_jobs=-1)),
+            ("model", RandomForestRegressor(n_estimators=100, max_depth=6, random_state=42, n_jobs=-1)),
         ]),
         "mlp": Pipeline([
             ("scaler", StandardScaler()),
-            ("model", MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=500, random_state=42)),
+            ("model", MLPRegressor(hidden_layer_sizes=(32, 16), activation="relu", solver="adam", max_iter=500, random_state=42)),
         ]),
     }
     if XGBOOST_AVAILABLE:
         models["xgboost"] = XGBRegressor(
-            n_estimators=200, max_depth=4, learning_rate=0.05,
+            n_estimators=100, max_depth=3, learning_rate=0.1,
+            objective="reg:squarederror",
             subsample=0.8, colsample_bytree=0.8, random_state=42,
             verbosity=0, n_jobs=-1,
         )

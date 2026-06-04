@@ -132,7 +132,7 @@ class TechnicalScorer:
     Rolling 24-month training window; no lookahead bias.
     """
 
-    def __init__(self, sequence_len: int = 20):
+    def __init__(self, sequence_len: int = 30):  # paper: 30-day rolling LSTM sequences
         self.sequence_len = sequence_len
         self.models: dict = {}
         self.scaler = MinMaxScaler()
