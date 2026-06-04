@@ -21,6 +21,53 @@ from anthropic import APIConnectionError, APITimeoutError, RateLimitError
 logger = logging.getLogger(__name__)
 
 # ── Prompt template (Section 3.3, Cohen et al. 2025) ─────────────────────
+import re as _re
+
+_QA_MARKERS = [
+    r"Questions?\s*(?:and\s*)?Answers?\s*Session",
+    r"Q&A\s*Session",
+    r"We'll now begin.*question",
+    r"Operator.*questions",
+    r"^\s*Operator\s*$",
+    r"QUESTION.*ANSWER",
+]
+
+
+def _qa_weighted_truncate(text: str, limit: int = 15_000, qa_fraction: float = 0.6) -> str:
+    """Truncate an earnings transcript toward the analyst Q&A rather than the
+    scripted prepared remarks.
+
+    A naive text[:limit] keeps the operator intro + management's prepared script
+    and routinely cuts off the Q&A entirely — but the unscripted Q&A (analysts
+    probing, management answering live) is where the differentiating signal is.
+    This keeps a head of the prepared section for guidance context and reserves
+    the majority of the budget for the Q&A. Falls back to a plain head cut when
+    no Q&A boundary is detectable, so behaviour is never worse than before.
+    """
+    if not text or len(text) <= limit:
+        return text or ""
+
+    split = len(text)
+    for marker in _QA_MARKERS:
+        m = _re.search(marker, text, _re.IGNORECASE | _re.MULTILINE)
+        if m and m.start() < split:
+            split = m.start()
+    if split >= len(text) * 0.9:          # no plausible Q&A boundary
+        return text[:limit]
+
+    prepared, qa = text[:split], text[split:]
+    sep = "\n[... prepared remarks truncated ...]\n"
+    budget = limit - len(sep)
+    qa_budget = int(budget * qa_fraction)
+    prep_budget = budget - qa_budget
+    # reallocate slack from whichever side is shorter to the other
+    prep_take = min(len(prepared), prep_budget)
+    qa_take = min(len(qa), qa_budget + (prep_budget - prep_take))
+    prep_take = min(len(prepared), prep_take + (qa_budget - min(len(qa), qa_budget)))
+    return prepared[:prep_take] + sep + qa[:qa_take]
+
+
+
 SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst scoring {ticker} ({company_name}) for a {frequency} portfolio rebalancing.
 
 You have been provided with six layers of information. Use all available layers — weight recent evidence more heavily.
@@ -236,7 +283,7 @@ class LLMScorer:
             period=period,
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
-            earnings_context=earnings_context[:15_000],   # ← 30K→15K (Option G)
+            earnings_context=_qa_weighted_truncate(earnings_context, 15_000),  # Q&A-weighted (#21)
             transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
@@ -311,7 +358,7 @@ class LLMScorer:
             period=period,
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
-            earnings_context=earnings_context[:15_000],
+            earnings_context=_qa_weighted_truncate(earnings_context, 15_000),
             transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
             balance_sheet_context=balance_sheet_context[:5_000],
