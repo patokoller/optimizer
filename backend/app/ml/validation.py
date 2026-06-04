@@ -120,3 +120,43 @@ def forward_returns_from_bars(
                     rec[f"fwd_return_{h}d"] = c / anchor_close - 1.0
         out[ticker] = rec
     return out
+
+
+def score_distribution(values) -> dict:
+    """Per-run summary of a score column for compression/calibration monitoring.
+
+    Returns count, mean, std, min, p10/p25/median/p75/p90, max, IQR, a 10-bin
+    decile histogram over [0,1], and a `compressed` flag. Score compression
+    (everything bunched near the middle) is the failure mode that hurts a
+    top-10 selection most, so this makes it visible per run and lets later
+    scoring changes be judged by their effect on the spread.
+    """
+    import statistics
+    vals = sorted(float(v) for v in values if v is not None)
+    n = len(vals)
+    if n == 0:
+        return {"n": 0}
+
+    def pct(p):
+        if n == 1:
+            return vals[0]
+        k = (n - 1) * p
+        f = int(k)
+        c = min(f + 1, n - 1)
+        return vals[f] + (vals[c] - vals[f]) * (k - f)
+
+    mean = sum(vals) / n
+    std = statistics.pstdev(vals) if n > 1 else 0.0
+    p25, p50, p75 = pct(0.25), pct(0.5), pct(0.75)
+    iqr = p75 - p25
+    bins = [0] * 10
+    for v in vals:
+        bins[min(9, max(0, int(v * 10)))] += 1
+    return {
+        "n": n, "mean": round(mean, 4), "std": round(std, 4),
+        "min": round(vals[0], 4), "p10": round(pct(0.1), 4), "p25": round(p25, 4),
+        "median": round(p50, 4), "p75": round(p75, 4), "p90": round(pct(0.9), 4),
+        "max": round(vals[-1], 4), "iqr": round(iqr, 4),
+        "histogram_deciles": bins,
+        "compressed": bool(std < 0.08 or iqr < 0.10),
+    }

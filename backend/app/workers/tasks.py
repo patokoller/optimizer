@@ -502,6 +502,35 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
             db.add(score_row)
             score_rows.append((ticker, overall))
 
+        # ── Step 11a: Score-distribution monitoring (#22) ──────────
+        from app.ml.validation import score_distribution
+
+        def _score_vals(d):
+            out = []
+            for _t in tickers:
+                _x = d.get(_t)
+                if isinstance(_x, dict):
+                    _x = _x.get("score")
+                if _x is not None:
+                    out.append(_x)
+            return out
+
+        _dists = {
+            "combined_overall": score_distribution(list(all_combined.values())),
+            "llm":     score_distribution(_score_vals(llm_scores)),
+            "tech_ml": score_distribution(_score_vals(tech_scores)),
+            "fund_ml": score_distribution(_score_vals(fund_scores)),
+            "entr_ml": score_distribution(_score_vals(entr_scores)),
+        }
+        for _label, _d in _dists.items():
+            if _d.get("n"):
+                _flag = "  COMPRESSED" if _d.get("compressed") else ""
+                logger.info(
+                    f"Score dist [{_label}]: n={_d['n']} mean={_d['mean']} std={_d['std']} "
+                    f"min={_d['min']} p25={_d['p25']} median={_d['median']} p75={_d['p75']} "
+                    f"max={_d['max']} iqr={_d['iqr']} hist={_d['histogram_deciles']}{_flag}"
+                )
+
         # ── Step 11b: Write ETF composite score rows ───────────────
         # For each EQUITY_ETF, average the scores of its underlying holdings
         for etf_ticker, holdings in etf_holding_map.items():
