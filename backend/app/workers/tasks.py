@@ -232,15 +232,14 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                 warnings_list.append("LLM_SCORE_FAILED: Batch API returned no results")
 
         # ── Step 6: FRED macro snapshot + regime classification ───
-        from app.data.fred_client import FREDClient
+        from app.data.av_macro import get_hybrid_macro_snapshot
         from app.ml.regime import classify_regime, apply_regime_weight_adjustment
         import numpy as np
 
         macro_snapshot = {}
         regime_data    = {"factor_weight_adj": {"technical": 1.0, "fundamental": 1.0, "entropy": 1.0}}
         try:
-            fred = FREDClient()
-            macro_snapshot = fred.get_macro_snapshot()
+            macro_snapshot = get_hybrid_macro_snapshot()
             regime_data    = classify_regime(macro_snapshot)
             logger.info(f"Regime: {regime_data['label']} (confidence={regime_data['confidence']:.2f})")
         except Exception as e:
@@ -899,10 +898,9 @@ def run_discovery_job(self, discovery_run_id: str):
             logger.warning("LLM batch returned no results — scores will use w=1.0 fallback")
 
         # ── Macro regime ───────────────────────────────────────────
-        from app.data.fred_client import FREDClient
+        from app.data.av_macro import get_hybrid_macro_snapshot
         from app.ml.regime import classify_regime
-        fred = FREDClient()
-        macro_snapshot = fred.get_macro_snapshot()
+        macro_snapshot = get_hybrid_macro_snapshot()
         regime_data = classify_regime(macro_snapshot)
         run.regime_label = regime_data.get("label", "Neutral / Mixed")
         run.regime_confidence = regime_data.get("confidence", 0.5)
