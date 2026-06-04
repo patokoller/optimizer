@@ -200,6 +200,9 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
         if not llm_failed_global:
             from app.data.enrichment_cache import extract_company_name
             # Build all prompts first, then submit as a single Batch API request (50% cost reduction)
+            from app.ml.peer_context import compute_peer_percentiles, format_peer_context
+            _peer_pcts = compute_peer_percentiles(fundamentals_df, prices_df, tickers, rebalance_date)  # #19
+            _peer_n = len(tickers)
             prompts = {}
             for ticker in tickers:
                 ctx      = filing_contexts.get(ticker, "")
@@ -210,6 +213,7 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     company_name=company_name,
                     frequency=frequency,
                     period=rebalance_date.strftime("%Y-%m"),
+                    peer_context=format_peer_context(_peer_pcts.get(ticker, {}), _peer_n),
                     filing_context=ctx,
                     earnings_context=enriched.get("transcript", ""),
                     earnings_history_context=enriched.get("earnings_history", ""),
@@ -896,6 +900,9 @@ def run_discovery_job(self, discovery_run_id: str):
         llm_scores = {}
         from app.data.enrichment_cache import extract_company_name
         # Build all prompts first, then submit as a single Batch API request (50% cost reduction)
+        from app.ml.peer_context import compute_peer_percentiles, format_peer_context
+        _peer_pcts = compute_peer_percentiles(fundamentals_df, prices_df, clean_tickers, rebalance_date)  # #19
+        _peer_n = len(clean_tickers)
         prompts = {}
         for ticker in clean_tickers:
             ctx      = filing_contexts.get(ticker, "")
@@ -906,6 +913,7 @@ def run_discovery_job(self, discovery_run_id: str):
                 company_name=company_name,
                 frequency=frequency,
                 period=rebalance_date.strftime("%Y-%m"),
+                peer_context=format_peer_context(_peer_pcts.get(ticker, {}), _peer_n),
                 filing_context=ctx,
                 earnings_context=enriched.get("transcript", ""),
                 earnings_history_context=enriched.get("earnings_history", ""),

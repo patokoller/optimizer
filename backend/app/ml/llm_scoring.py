@@ -72,6 +72,9 @@ SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst scoring {ticker} ({com
 
 You have been provided with six layers of information. Use all available layers — weight recent evidence more heavily.
 
+PEER POSITION (relative rank across this period's scoreable universe — use this to DIFFERENTIATE this name from its peers; do not anchor every score near the middle):
+{peer_context}
+
 SCORING CRITERIA:
 1. Revenue growth trajectory and quality (not just magnitude — consistency matters)
 2. Margin expansion or compression (operating leverage signals)
@@ -240,6 +243,7 @@ class LLMScorer:
         period: str,
         filing_context: str,
         earnings_context: str,
+        peer_context: str = "",
         news_context: str = "",
         earnings_history_context: str = "",
         overview_context: str = "",
@@ -281,6 +285,7 @@ class LLMScorer:
             company_name=company_name,
             frequency=frequency,
             period=period,
+            peer_context=(peer_context or "(peer context unavailable this period)")[:1_000],
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
             earnings_context=_qa_weighted_truncate(earnings_context, 15_000),  # Q&A-weighted (#21)
@@ -336,6 +341,7 @@ class LLMScorer:
         period: str,
         filing_context: str = "",
         earnings_context: str = "",
+        peer_context: str = "",
         news_context: str = "",
         earnings_history_context: str = "",
         overview_context: str = "",
@@ -356,6 +362,7 @@ class LLMScorer:
             company_name=company_name,
             frequency=frequency,
             period=period,
+            peer_context=(peer_context or "(peer context unavailable this period)")[:1_000],
             overview_context=overview_context[:5_000],
             filing_context=filing_context[:45_000],
             earnings_context=_qa_weighted_truncate(earnings_context, 15_000),
