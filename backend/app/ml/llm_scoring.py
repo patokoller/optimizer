@@ -33,6 +33,29 @@ _QA_MARKERS = [
 ]
 
 
+def _safe_custom_id_map(tickers: list[str]) -> dict:
+    """Map a list of tickers to Anthropic-batch-safe custom_ids.
+
+    The batch custom_id must match ^[a-zA-Z0-9_-]{1,64}$. Tickers like BRK.B
+    contain characters (dots) that violate it; a single bad id 400s the whole
+    batch. This replaces invalid chars with '_', truncates to 64, and resolves
+    collisions (e.g. BRK.B vs a real BRK_B) with a numeric suffix.
+
+    Returns {custom_id: original_ticker} (1:1).
+    """
+    id_to_ticker: dict[str, str] = {}
+    for tkr in tickers:
+        base = _re.sub(r"[^a-zA-Z0-9_-]", "_", tkr)[:64] or "T"
+        cid = base
+        n = 0
+        while cid in id_to_ticker:
+            n += 1
+            suffix = f"_{n}"
+            cid = base[:64 - len(suffix)] + suffix
+        id_to_ticker[cid] = tkr
+    return id_to_ticker
+
+
 def _qa_weighted_truncate(text: str, limit: int = 15_000, qa_fraction: float = 0.6) -> str:
     """Truncate an earnings transcript toward the analyst Q&A rather than the
     scripted prepared remarks.
@@ -405,9 +428,15 @@ class LLMScorer:
         import time as _time
 
         # ── 1. Build batch requests ────────────────────────────────
+        # Anthropic batch custom_id must match ^[a-zA-Z0-9_-]{1,64}$ — tickers
+        # like BRK.B (dot) violate it and 400 the ENTIRE batch, zeroing LLM
+        # scores for every name. Sanitize to a safe id and keep a reverse map.
+        id_to_ticker = _safe_custom_id_map(list(prompts.keys()))
+        ticker_to_id = {t: i for i, t in id_to_ticker.items()}
+
         requests = [
             {
-                "custom_id": ticker,
+                "custom_id": ticker_to_id[ticker],
                 "params": {
                     "model": self.model,
                     "max_tokens": 800,
@@ -453,7 +482,7 @@ class LLMScorer:
         scores = {}
         try:
             for result in self.client.beta.messages.batches.results(batch.id):
-                ticker = result.custom_id
+                ticker = id_to_ticker.get(result.custom_id, result.custom_id)
                 if result.result.type != "succeeded":
                     logger.warning(f"Batch result {ticker}: {result.result.type}")
                     continue
