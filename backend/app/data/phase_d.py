@@ -230,6 +230,7 @@ def compute_language_drift(
 
     # Try to fetch up to 8 quarters
     quarterly_data = []
+    fetch_errors = 0
     current_year = datetime.utcnow().year
 
     for year_offset in range(2):          # last 2 years
@@ -240,19 +241,28 @@ def compute_language_drift(
                 continue
             quarter_str = f"{year}Q{quarter}"
             try:
-                transcript = av_client.get_earnings_transcript(ticker, quarters=[quarter_str])
+                transcript = av_client.get_earnings_transcript(
+                    ticker, specific_quarters=[quarter_str]
+                )
                 if transcript and len(transcript) > 500:
                     quarterly_data.append({
                         "quarter": quarter_str,
                         "text":    transcript,
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                # Count and surface — a silent `pass` here hid a TypeError that
+                # zeroed drift for the entire universe across multiple runs.
+                fetch_errors += 1
+                logger.debug(f"Drift transcript fetch failed {ticker} {quarter_str}: {e}")
             if len(quarterly_data) >= n_quarters:
                 break
         if len(quarterly_data) >= n_quarters:
             break
 
+    logger.info(
+        f"Drift transcripts {ticker}: {len(quarterly_data)} quarter(s) fetched, "
+        f"{fetch_errors} error(s)"
+    )
     if len(quarterly_data) < 2:
         return ""  # not enough data for drift analysis
 
