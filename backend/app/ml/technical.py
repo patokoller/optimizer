@@ -164,6 +164,13 @@ class TechnicalScorer:
         X = self.scaler.fit_transform(df[FEATURE_COLS].values)
         y = df["forward_return"].values
 
+        if not TENSORFLOW_AVAILABLE:
+            logger.warning(
+                "Technical ensemble: TensorFlow unavailable — LSTM member skipped "
+                "(3/4 members vs paper's XGBoost+LightGBM+CatBoost+LSTM spec; "
+                "tensorflow is commented out in requirements.txt)"
+            )
+
         # XGBoost
         if XGBOOST_AVAILABLE:
             try:

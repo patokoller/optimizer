@@ -210,6 +210,12 @@ class EntropyScorer:
                 logger.error(f"Entropy CatBoost failed: {e}")
 
         self._trained = bool(self.models)
+        if len(self.models) < 4:
+            logger.warning(
+                f"Entropy ensemble trained with {len(self.models)}/4 members — "
+                "LSTM absent (no LSTM implementation in entropy.py and TensorFlow "
+                "not installed; paper spec is XGBoost+LightGBM+CatBoost+LSTM)"
+            )
         logger.info(f"Entropy model trained ({len(self.models)} members) on {len(X)} samples")
         return self
 
