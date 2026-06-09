@@ -148,9 +148,25 @@ SEC COMMENT LETTERS HEURISTIC:
 - Topics: revenue recognition, goodwill, going concern = highest severity
 - No correspondence in 2 years: positive signal (clean regulatory relationship)
 {optional_signal_heuristics}
+SCORE CALIBRATION (anchor the number — do NOT default to 0.70/0.75):
+Place this name into a band using its standing across the PEER POSITION metrics
+above, then adjust within/across the band for evidence those metrics do not
+capture. Use the full 0.0–1.0 range — in a ~100-name universe most names should
+NOT receive the same score, and only a handful belong in the top band.
+  - 0.85-1.00  top-decile conviction; evidence decisively strong (expect few)
+  - 0.65-0.85  clearly above the peer median; strong but not exceptional
+  - 0.45-0.65  around the peer median; balanced or genuinely mixed evidence
+  - 0.25-0.45  below the peer median; identifiable weakness or elevated risk
+  - 0.00-0.25  conviction sell; serious deterioration or red flags
+Anchoring rule: let this name's peer standing set the band, then move at most
+~0.15 for qualitative evidence (guidance, filings, insider/institutional signals)
+not reflected in the peer metrics. Report the precise value your evidence implies
+(e.g. 0.58, 0.41) rather than rounding to 0.70/0.75 — clustering at round values
+is a calibration failure.
+
 Return ONLY valid JSON with this exact structure:
 {{
-  "score": <float 0.0–1.0, where 1.0 = strongest conviction buy, 0.0 = strongest conviction sell>,
+  "score": <float 0.0-1.0 per SCORE CALIBRATION above; 1.0 = strongest conviction buy, 0.0 = strongest conviction sell>,
   "key_positives": [<2-4 specific, evidence-backed positive factors citing which source they come from>],
   "key_risks": [<2-4 specific, evidence-backed risk factors citing which source they come from>],
   "confidence": "<low|medium|high>"
