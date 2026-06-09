@@ -1111,6 +1111,35 @@ def run_discovery_job(self, discovery_run_id: str):
 
         db.flush()  # get IDs before ranking
 
+        # ── Score-distribution monitoring (#22) ──────────────────
+        from app.ml.validation import score_distribution
+
+        def _score_vals(_d):
+            _out = []
+            for _t in clean_tickers:
+                _x = _d.get(_t)
+                if isinstance(_x, dict):
+                    _x = _x.get("score")
+                if _x is not None:
+                    _out.append(_x)
+            return _out
+
+        for _label, _dist in {
+            "combined_overall": score_distribution(list(all_scores.values())),
+            "llm":     score_distribution(_score_vals(llm_scores)),
+            "tech_ml": score_distribution(_score_vals(tech_scores)),
+            "fund_ml": score_distribution(_score_vals(fund_scores)),
+            "entr_ml": score_distribution(_score_vals(entr_scores)),
+        }.items():
+            if _dist.get("n"):
+                _flag = "  COMPRESSED" if _dist.get("compressed") else ""
+                logger.info(
+                    f"Score dist [{_label}]: n={_dist['n']} mean={_dist['mean']} std={_dist['std']} "
+                    f"min={_dist['min']} p25={_dist['p25']} median={_dist['median']} p75={_dist['p75']} "
+                    f"max={_dist['max']} iqr={_dist['iqr']} hist={_dist['histogram_deciles']}{_flag}"
+                )
+
+
         # ── Compute and write ranks ────────────────────────────────
         sorted_tickers = sorted(
             [(t, s) for t, s in all_scores.items() if s is not None],
