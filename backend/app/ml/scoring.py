@@ -64,6 +64,57 @@ def normalize_scores(raw_scores: list[float], clip_pct: float = 0.01) -> list[fl
     return list((normed - lo) / (hi - lo))
 
 
+def rank_normalize(raw_by_ticker: dict[str, Optional[float]]) -> dict[str, float]:
+    """
+    Cross-sectional percentile-RANK normalization to [0, 1].
+
+    Each ticker's score becomes its fractional rank across the universe:
+        score = (#values strictly below + 0.5 × #ties) / n   ∈ (0, 1)
+
+    This is the robust reading of the paper's "percentile-based normalization"
+    (Section 3.4, Cohen et al. 2025). Unlike min-max scaling — `(x-min)/(max-min)`
+    — it is immune to right-skew: a single large prediction can no longer set the
+    max and crush every other name toward zero. The output is ~uniform on [0, 1]
+    regardless of the raw distribution's shape, which is what a cross-sectional
+    SELECTION task needs (relative ordering, evenly spread, no flooring).
+
+    Note: a uniform spread is produced *by construction*; it certifies
+    differentiation, NOT predictive power. The IC harness remains the test of
+    whether the ranks are actually informative.
+
+    Ties receive the average (mid) rank. None/NaN inputs are dropped.
+    n == 0 → {}; n == 1 → {ticker: 0.5}.
+    """
+    items = [
+        (t, float(v)) for t, v in raw_by_ticker.items()
+        if v is not None and not (isinstance(v, float) and np.isnan(v))
+    ]
+    n = len(items)
+    if n == 0:
+        return {}
+    if n == 1:
+        return {items[0][0]: 0.5}
+
+    vals = np.array([v for _, v in items], dtype=float)
+    order = np.argsort(vals, kind="mergesort")
+    sorted_vals = vals[order]
+    # Average-rank for ties: assign each value the mean of the fractional ranks
+    # it would occupy. Fractional rank r_k = (k + 0.5) / n for position k (0-based).
+    frac = (np.arange(n) + 0.5) / n
+    out_sorted = np.empty(n, dtype=float)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and sorted_vals[j + 1] == sorted_vals[i]:
+            j += 1
+        out_sorted[i : j + 1] = frac[i : j + 1].mean()
+        i = j + 1
+    result = {}
+    for pos, idx in enumerate(order):
+        result[items[idx][0]] = float(out_sorted[pos])
+    return result
+
+
 def select_top_n(scores: dict[str, float], n: int = 10) -> list[str]:
     """
     Select top-N tickers by score — equal-weighted portfolio formation.

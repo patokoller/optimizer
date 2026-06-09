@@ -231,10 +231,11 @@ class FundamentalScorer:
                 logger.error(f"Fundamental prediction error for {ticker}: {e}")
                 raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
 
-        # Normalize ensemble scores to [0, 1] across the universe
+        # Normalize ensemble scores to [0, 1] across the universe (percentile-rank;
+        # min-max here floored skewed predictions near 0 — see scoring.rank_normalize)
+        from app.ml.scoring import rank_normalize
         raw_vals = {t: v["raw_ensemble"] for t, v in raw_results.items()}
-        lo = min(raw_vals.values(), default=0)
-        hi = max(raw_vals.values(), default=1)
+        norm_by_ticker = rank_normalize(raw_vals)
 
         results = {}
         for ticker in tickers:
@@ -242,8 +243,7 @@ class FundamentalScorer:
                 results[ticker] = {"score": 0.5, "dispersion": 0.0, "feature_importance": {}}
                 continue
             r = raw_results[ticker]
-            raw = r.get("raw_ensemble", 0.5)
-            norm = float((raw - lo) / (hi - lo)) if hi > lo else 0.5
+            norm = norm_by_ticker.get(ticker, 0.5)
             results[ticker] = {
                 "score":              norm,
                 "ridge":              r.get("ridge"),

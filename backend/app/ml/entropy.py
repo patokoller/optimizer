@@ -272,10 +272,10 @@ class EntropyScorer:
                 logger.error(f"Entropy predict error {ticker}: {e}")
                 raw_results[ticker] = {"raw_ensemble": 0.5, "dispersion": 0.0, "feature_importance": {}}
 
-        # Normalize ensemble to [0, 1]
+        # Normalize ensemble to [0, 1] (percentile-rank; min-max floored skewed preds)
+        from app.ml.scoring import rank_normalize
         raw_vals = {t: v["raw_ensemble"] for t, v in raw_results.items()}
-        lo = min(raw_vals.values(), default=0)
-        hi = max(raw_vals.values(), default=1)
+        norm_by_ticker = rank_normalize(raw_vals)
 
         results = {}
         for ticker in tickers:
@@ -283,8 +283,7 @@ class EntropyScorer:
                 results[ticker] = {"score": 0.5, "dispersion": 0.0, "feature_importance": {}}
                 continue
             r = raw_results[ticker]
-            raw = r.get("raw_ensemble", 0.5)
-            norm = float((raw - lo) / (hi - lo)) if hi > lo else 0.5
+            norm = norm_by_ticker.get(ticker, 0.5)
             results[ticker] = {
                 "score":              norm,
                 "xgboost":            r.get("xgboost"),
