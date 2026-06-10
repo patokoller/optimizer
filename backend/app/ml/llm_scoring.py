@@ -90,6 +90,101 @@ def _qa_weighted_truncate(text: str, limit: int = 15_000, qa_fraction: float = 0
     return prepared[:prep_take] + sep + qa[:qa_take]
 
 
+# ── Two-stage extract-then-score (#20 part 2) ───────────────────────────
+# Stage 1 extracts a structured fact sheet from the briefing materials (no
+# score). Stage 2 scores from the fact sheet via explicit adjustment
+# arithmetic (band_base + itemized deltas), which breaks the holistic
+# "feels like a B+ -> 0.72" anchoring the rubric alone did not fix.
+# Kill switch: set env LLM_TWO_STAGE=0 to restore single-stage scoring.
+
+_CALIBRATION_MARKER = "SCORE CALIBRATION (anchor the number"
+
+
+def two_stage_enabled() -> bool:
+    return os.environ.get("LLM_TWO_STAGE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def split_prompt_materials(prompt: str) -> Optional[str]:
+    """Return the header+materials portion of a single-stage prompt (everything
+    before the SCORE CALIBRATION block), or None if the marker is absent —
+    in which case the ticker stays on the single-stage path."""
+    idx = prompt.find(_CALIBRATION_MARKER)
+    if idx <= 0:
+        return None
+    return prompt[:idx].rstrip()
+
+
+EXTRACTION_TAIL = """
+TASK — FACT EXTRACTION ONLY (do NOT score, do NOT give an outlook rating):
+From the materials above, extract a structured fact sheet. Be factual and
+specific; copy concrete numbers where present; write "none stated" where a
+field has no support in the materials. Faithfully carry over the PEER
+POSITION percentiles into peer_standing.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "revenue_trajectory": "<1-2 factual sentences with figures>",
+  "margins_earnings_quality": "<1-2 factual sentences>",
+  "guidance": {"direction": "<raised|maintained|lowered|none>", "specifics": "<concrete guidance figures or 'none stated'>"},
+  "management_tone": {"hedging": "<low|moderate|high>", "notable": "<1 sentence>"},
+  "competitive_position": "<1-2 factual sentences>",
+  "peer_standing": "<the peer percentile figures from the PEER POSITION section, verbatim>",
+  "catalysts": ["<catalyst 1>", "<catalyst 2>"],
+  "key_risks": ["<risk 1>", "<risk 2>"],
+  "red_flags": ["<red flag or empty list>"]
+}"""
+
+
+STAGE2_SCORE_TEMPLATE = """You are a quantitative analyst scoring {ticker} for a monthly portfolio rebalancing.
+You are given ONLY a structured fact sheet extracted from this company's filings,
+earnings calls, and news — score from these facts alone.
+
+=== FACT SHEET ({ticker}) ===
+{fact_sheet}
+
+SCORE CALIBRATION (anchor the number — do NOT default to 0.70/0.75):
+  - 0.85-1.00  top-decile conviction; evidence decisively strong (expect few)
+  - 0.65-0.85  clearly above the peer median; strong but not exceptional
+  - 0.45-0.65  around the peer median; balanced or genuinely mixed evidence
+  - 0.25-0.45  below the peer median; identifiable weakness or elevated risk
+  - 0.00-0.25  conviction sell; serious deterioration or red flags
+
+DERIVATION REQUIREMENT (mandatory arithmetic):
+1. Set band_base from peer_standing: a value reflecting where this name's
+   overall peer standing falls on [0,1] (roughly the average peer percentile
+   divided by 100, weighted toward the metrics most relevant to this company).
+2. List adjustments for qualitative evidence the peer metrics do not capture
+   (guidance, tone, catalysts, red flags). Each adjustment: a reason and a
+   signed delta with |delta| <= 0.05; at most 4 adjustments; |sum of deltas| <= 0.15.
+3. score = band_base + sum(deltas), reported to two decimals. The reported
+   score MUST equal that sum (within 0.01). Scores like 0.58 or 0.41 are
+   expected; repeated round values like 0.70/0.75 indicate calibration failure.
+
+Return ONLY valid JSON with this exact structure:
+{{
+  "band_base": <float>,
+  "adjustments": [{{"reason": "<short>", "delta": <signed float>}}],
+  "score": <float 0.0-1.0 = band_base + sum of deltas>,
+  "key_positives": ["<signal 1>", "<signal 2>"],
+  "key_risks": ["<risk 1>", "<risk 2>"],
+  "confidence": "<low|medium|high>"
+}}"""
+
+
+def build_extraction_prompt(single_stage_prompt: str) -> Optional[str]:
+    materials = split_prompt_materials(single_stage_prompt)
+    if materials is None:
+        return None
+    return materials + "\n" + EXTRACTION_TAIL
+
+
+def build_stage2_prompt(ticker: str, fact_sheet: dict) -> str:
+    return STAGE2_SCORE_TEMPLATE.format(
+        ticker=ticker, fact_sheet=json.dumps(fact_sheet, indent=2)
+    )
+
+
+
 
 SCORE_PROMPT_TEMPLATE = """You are a quantitative analyst scoring {ticker} ({company_name}) for a {frequency} portfolio rebalancing.
 
@@ -418,22 +513,20 @@ class LLMScorer:
             concentration_instruction=concentration_instruction[:1_000],
         )
 
-    def score_batch(
+    def _run_batch_raw(
         self,
-        prompts: dict,          # {ticker: prompt_string}
+        prompts: dict,           # {ticker: prompt_string}
+        label: str,
+        max_tokens: int = 800,
         poll_interval: int = 60,
-        max_wait: int = 7200,   # 2 hours hard ceiling
+        max_wait: int = 7200,
     ) -> dict:
         """
-        Submit all prompts as a single Anthropic Message Batch (50% cost reduction).
+        Submit prompts as one Anthropic Message Batch; poll; return raw text.
 
-        Returns {ticker: parsed_score_dict} for succeeded results.
-        Tickers that error or time out are omitted → caller uses w=1.0 fallback.
-
-        Args:
-            prompts:       dict of {ticker: prompt_string}
-            poll_interval: seconds between status polls (default 60)
-            max_wait:      hard timeout in seconds (default 7200 = 2 hrs)
+        Returns {ticker: raw_response_text} for succeeded results only.
+        Shared machinery for single-stage scoring, extraction, and stage-2
+        scoring — identical custom_id sanitization, polling, and logging.
         """
         if self.client is None:
             logger.warning("LLM scorer not initialized — skipping batch scoring")
@@ -443,7 +536,6 @@ class LLMScorer:
 
         import time as _time
 
-        # ── 1. Build batch requests ────────────────────────────────
         # Anthropic batch custom_id must match ^[a-zA-Z0-9_-]{1,64}$ — tickers
         # like BRK.B (dot) violate it and 400 the ENTIRE batch, zeroing LLM
         # scores for every name. Sanitize to a safe id and keep a reverse map.
@@ -455,7 +547,7 @@ class LLMScorer:
                 "custom_id": ticker_to_id[ticker],
                 "params": {
                     "model": self.model,
-                    "max_tokens": 800,
+                    "max_tokens": max_tokens,
                     "temperature": 0.1,
                     "messages": [{"role": "user", "content": prompt}],
                 },
@@ -463,15 +555,13 @@ class LLMScorer:
             for ticker, prompt in prompts.items()
         ]
 
-        # ── 2. Submit batch ────────────────────────────────────────
         try:
             batch = self.client.beta.messages.batches.create(requests=requests)
-            logger.info(f"Batch submitted: {batch.id} — {len(requests)} requests")
+            logger.info(f"Batch submitted ({label}): {batch.id} — {len(requests)} requests")
         except Exception as e:
-            logger.error(f"Batch submission failed: {e}", exc_info=True)
+            logger.error(f"Batch submission failed ({label}): {e}", exc_info=True)
             return {}
 
-        # ── 3. Poll until complete ────────────────────────────────
         elapsed = 0
         while elapsed < max_wait:
             _time.sleep(poll_interval)
@@ -484,40 +574,151 @@ class LLMScorer:
 
             counts = status.request_counts
             logger.info(
-                f"Batch {batch.id}: {status.processing_status} | "
+                f"Batch {batch.id} ({label}): {status.processing_status} | "
                 f"processing={counts.processing} succeeded={counts.succeeded} "
                 f"errored={counts.errored} elapsed={elapsed}s"
             )
             if status.processing_status == "ended":
                 break
         else:
-            logger.error(f"Batch {batch.id} timed out after {max_wait}s")
+            logger.error(f"Batch {batch.id} ({label}) timed out after {max_wait}s")
             return {}
 
-        # ── 4. Collect results ────────────────────────────────────
-        scores = {}
+        raw_by_ticker = {}
         try:
             for result in self.client.beta.messages.batches.results(batch.id):
                 ticker = id_to_ticker.get(result.custom_id, result.custom_id)
                 if result.result.type != "succeeded":
-                    logger.warning(f"Batch result {ticker}: {result.result.type}")
+                    logger.warning(f"Batch result {ticker} ({label}): {result.result.type}")
                     continue
                 try:
                     raw = result.result.message.content[0].text.strip()
-                    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-                    parsed = json.loads(raw)
-                    assert "score" in parsed
-                    assert 0.0 <= float(parsed["score"]) <= 1.0
-                    parsed["score"] = float(parsed["score"])
-                    scores[ticker] = parsed
-                except (json.JSONDecodeError, AssertionError, IndexError) as e:
-                    logger.error(f"Batch parse error for {ticker}: {e}")
+                    raw_by_ticker[ticker] = raw
+                except (IndexError, AttributeError) as e:
+                    logger.error(f"Batch raw-text error for {ticker} ({label}): {e}")
         except Exception as e:
-            logger.error(f"Batch results retrieval failed: {e}", exc_info=True)
+            logger.error(f"Batch results retrieval failed ({label}): {e}", exc_info=True)
 
-        logger.info(
-            f"Batch {batch.id} complete: {len(scores)}/{len(prompts)} tickers scored successfully"
+        return raw_by_ticker
+
+    @staticmethod
+    def _strip_fences(raw: str) -> str:
+        return raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    def _parse_score_json(self, ticker: str, raw: str) -> Optional[dict]:
+        """Parse a scoring response. Requires score in [0,1]; tolerates extra
+        fields (band_base, adjustments) which flow into llm_reasoning_json.
+        Lightly validates the two-stage arithmetic without rejecting scores."""
+        try:
+            parsed = json.loads(self._strip_fences(raw))
+            assert "score" in parsed
+            assert 0.0 <= float(parsed["score"]) <= 1.0
+            parsed["score"] = float(parsed["score"])
+        except (json.JSONDecodeError, AssertionError, IndexError, TypeError, ValueError) as e:
+            logger.error(f"Batch parse error for {ticker}: {e}")
+            return None
+
+        if "band_base" in parsed and isinstance(parsed.get("adjustments"), list):
+            try:
+                implied = float(parsed["band_base"]) + sum(
+                    float(a.get("delta", 0)) for a in parsed["adjustments"]
+                )
+                if abs(implied - parsed["score"]) > 0.02:
+                    logger.warning(
+                        f"Two-stage arithmetic drift {ticker}: score={parsed['score']} "
+                        f"vs band_base+deltas={implied:.3f} (keeping reported score)"
+                    )
+            except (TypeError, ValueError):
+                pass
+        return parsed
+
+    def score_batch(
+        self,
+        prompts: dict,          # {ticker: prompt_string}
+        poll_interval: int = 60,
+        max_wait: int = 7200,   # 2 hours hard ceiling
+    ) -> dict:
+        """
+        Score all tickers via Anthropic Message Batches (50% cost reduction).
+
+        Single-stage (LLM_TWO_STAGE=0): one batch with the provided prompts.
+        Two-stage (default): batch 1 extracts a structured fact sheet per
+        ticker from the prompt's materials; batch 2 scores from the fact
+        sheet with mandatory adjustment arithmetic. Any ticker whose
+        extraction fails (parse error, batch error, missing marker) falls
+        back to its original single-stage prompt within batch 2 — no ticker
+        loses its LLM score to the two-stage machinery.
+
+        Returns {ticker: parsed_score_dict}; each result is tagged with
+        "two_stage": bool for auditing. Tickers that error or time out are
+        omitted → caller uses w=1.0 fallback.
+        """
+        if not prompts:
+            return {}
+
+        if not two_stage_enabled():
+            raw = self._run_batch_raw(
+                prompts, "scoring", max_tokens=800,
+                poll_interval=poll_interval, max_wait=max_wait,
+            )
+            scores = {}
+            for ticker, txt in raw.items():
+                parsed = self._parse_score_json(ticker, txt)
+                if parsed is not None:
+                    parsed["two_stage"] = False
+                    scores[ticker] = parsed
+            logger.info(f"Batch complete: {len(scores)}/{len(prompts)} tickers scored successfully")
+            return scores
+
+        # ── Stage 1: fact extraction ──────────────────────────────
+        extract_prompts = {}
+        for ticker, prompt in prompts.items():
+            ep = build_extraction_prompt(prompt)
+            if ep is not None:
+                extract_prompts[ticker] = ep
+        logger.info(f"Two-stage LLM enabled: extracting facts for {len(extract_prompts)}/{len(prompts)} tickers")
+
+        raw1 = self._run_batch_raw(
+            extract_prompts, "extraction", max_tokens=1024,
+            poll_interval=poll_interval, max_wait=max_wait,
         )
+        facts = {}
+        parse_failed = 0
+        for ticker, txt in raw1.items():
+            try:
+                fs = json.loads(self._strip_fences(txt))
+                assert isinstance(fs, dict) and fs
+                facts[ticker] = fs
+            except (json.JSONDecodeError, AssertionError) as e:
+                parse_failed += 1
+                logger.warning(f"Extraction parse failed {ticker} — falling back to single-stage: {e}")
+
+        fallback = [t for t in prompts if t not in facts]
+        logger.info(
+            f"Two-stage extraction: ok={len(facts)} parse_failed={parse_failed} "
+            f"batch_missing={len(fallback) - parse_failed if len(fallback) >= parse_failed else 0} | "
+            f"single-stage fallback for {len(fallback)} ticker(s)"
+        )
+
+        # ── Stage 2: score (fact sheet where available, original prompt otherwise)
+        stage2_prompts = {}
+        for ticker, prompt in prompts.items():
+            if ticker in facts:
+                stage2_prompts[ticker] = build_stage2_prompt(ticker, facts[ticker])
+            else:
+                stage2_prompts[ticker] = prompt
+
+        raw2 = self._run_batch_raw(
+            stage2_prompts, "scoring", max_tokens=1024,
+            poll_interval=poll_interval, max_wait=max_wait,
+        )
+        scores = {}
+        for ticker, txt in raw2.items():
+            parsed = self._parse_score_json(ticker, txt)
+            if parsed is not None:
+                parsed["two_stage"] = ticker in facts
+                scores[ticker] = parsed
+        logger.info(f"Batch complete: {len(scores)}/{len(prompts)} tickers scored successfully")
         return scores
 
 
