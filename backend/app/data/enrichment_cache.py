@@ -153,6 +153,9 @@ def set_drift_cached(db: Session, ticker: str, drift_text: str, quarter: Optiona
         db.rollback()
 
 
+DRIFT_EMPTY_SENTINEL = "__NO_DRIFT_DATA__"
+
+
 def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
     """
     Return language drift analysis for ticker, using quarterly cache.
@@ -160,7 +163,14 @@ def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
     Cache miss → calls compute_language_drift() (8 AV transcript calls, ~15s).
     Cache hit  → returns instantly from DB.
 
-    Called once per ticker per quarter; all 12 monthly runs within a quarter
+    Empty results (no transcripts: ETFs, dotted/foreign tickers, micro-caps)
+    are cached as a tombstone for the quarter — otherwise these names re-attempt
+    their AV transcript fetches on EVERY run, forever. Trade-off: a name whose
+    first-ever transcript appears mid-quarter won't get drift until next
+    quarter; acceptable since the affected set is dominated by names that will
+    never have transcripts.
+
+    Called once per ticker per quarter; all monthly runs within a quarter
     after the first will hit the cache at no cost.
     """
     from app.data.phase_d import compute_language_drift
@@ -168,6 +178,9 @@ def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
 
     cached = get_drift_cached(db, ticker, quarter)
     if cached:
+        if cached == DRIFT_EMPTY_SENTINEL:
+            logger.debug(f"Drift cache HIT {ticker} ({quarter}) — empty tombstone")
+            return ""
         logger.debug(f"Drift cache HIT {ticker} ({quarter})")
         return cached
 
@@ -181,6 +194,12 @@ def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
     if drift:
         set_drift_cached(db, ticker, drift, quarter)
         logger.info(f"Drift cached {ticker} ({quarter}) — {len(drift)} chars")
+    else:
+        set_drift_cached(db, ticker, DRIFT_EMPTY_SENTINEL, quarter)
+        logger.info(
+            f"Drift empty-cached {ticker} ({quarter}) — no transcripts; "
+            "will not retry until next quarter"
+        )
 
     return drift
 
