@@ -165,7 +165,7 @@ def score_one(
         from app.data import clients as _clients
         alpaca = alpaca or _clients.AlpacaClient()
         av = av or _clients.AlphaVantageClient()
-        edgar = edgar or _clients.EdgarClient()
+        edgar = edgar or _clients.EDGARClient()
     if llm_scorer is None:
         from app.ml.llm_scoring import LLMScorer
         llm_scorer = LLMScorer()

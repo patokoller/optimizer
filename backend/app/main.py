@@ -12,6 +12,7 @@ from app.database import engine, Base
 from app.routers import portfolio, scores, optimize, rebalance, backtest, dashboard
 from app.routers.backtest import export_router
 from app.routers.discovery import router as discovery_router
+from app.routers.search import router as search_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ app.include_router(backtest.router,   prefix="/api/backtest",   tags=["backtest"
 app.include_router(dashboard.router,  prefix="/api/dashboard",  tags=["dashboard"])
 app.include_router(export_router,     prefix="/api/export",     tags=["export"])
 app.include_router(discovery_router)
+app.include_router(search_router)
 
 
 @app.get("/health")

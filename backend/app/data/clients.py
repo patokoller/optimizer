@@ -1069,6 +1069,37 @@ class EDGARClient:
 
         raise EDGARError(f"CIK not found for {ticker}")
 
+    def resolve_ticker(self, ticker: str) -> dict:
+        """
+        Lightweight validity/identity check for an arbitrary ticker — no filings
+        fetch, no scoring. Backs the search screen's resolve step.
+
+        Returns {"valid": bool, "ticker": str, "company_name": str|None,
+                 "is_etf": bool}. A ticker is "valid" if it's a known US-listed
+                 equity in SEC company_tickers.json or a recognised ETF.
+        """
+        t = ticker.strip().upper()
+        result = {"valid": False, "ticker": t, "company_name": None, "is_etf": False}
+        if not t:
+            return result
+
+        if t in ETF_TICKERS:
+            result.update(valid=True, is_etf=True, company_name=t)
+            return result
+
+        try:
+            company_data = self._load_company_tickers()
+        except Exception:
+            company_data = {}
+
+        clean = t.replace(".", "-")
+        for val in (company_data or {}).values():
+            sym = str(val.get("ticker", "")).upper()
+            if sym == t or sym == clean or sym == clean.split("-")[0]:
+                result.update(valid=True, company_name=val.get("title") or t)
+                return result
+        return result
+
     def get_recent_filings(
         self,
         ticker: str,

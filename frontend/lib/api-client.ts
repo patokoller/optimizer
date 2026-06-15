@@ -18,6 +18,51 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// ── Single-stock search types (keys arrive camelCased by the interceptor) ──
+export interface TickerResolution {
+  valid: boolean;
+  ticker: string;
+  companyName: string | null;
+  isEtf: boolean;
+}
+
+export interface StrategyScore {
+  available: boolean;
+  mlPercentile: number | null;
+  combined: number | null;
+  mlRaw?: number;
+}
+
+export interface SearchScoreResult {
+  ticker: string;
+  companyName?: string | null;
+  isEtf?: boolean;
+  asOf: string | null;
+  frequency: string;
+  comparisonUniverse: { sourceRun: string | null; size: number; label: string };
+  overallScore: number | null;
+  strategies: {
+    fundamental: StrategyScore;
+    technical: StrategyScore;
+    entropy: StrategyScore;
+  };
+  llm: {
+    available: boolean;
+    score: number | null;
+    bandBase?: number;
+    adjustments?: { reason: string; delta: number }[];
+    keyPositives?: string[];
+    keyRisks?: string[];
+    confidence?: string;
+    twoStage?: boolean;
+    factSheet?: Record<string, unknown>;
+  };
+  dataAvailability: Record<string, boolean>;
+  bundleAge?: string | null;
+  error?: string;
+  message?: string;
+}
+
 // ── snake_case → camelCase (applied to all API responses) ────────────────
 function toCamel(s: string): string {
   return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -125,6 +170,17 @@ class APIClient {
   async getDiscoveryStatus(runId: string): Promise<{ run: any; scores: any[] }> {
     const { data } = await this.http.get(`/api/discovery/status/${runId}`);
     return data;
+  }
+
+  // ── Single-stock search (on-demand scoring) ───────────────────────
+  async resolveTicker(ticker: string): Promise<TickerResolution> {
+    const { data } = await this.http.get(`/api/search/resolve/${encodeURIComponent(ticker)}`);
+    return data as TickerResolution;
+  }
+
+  async scoreTicker(ticker: string): Promise<SearchScoreResult> {
+    const { data } = await this.http.post(`/api/search/score`, { ticker });
+    return data as SearchScoreResult;
   }
 
   // ── Optimization ──────────────────────────────────────────────────
