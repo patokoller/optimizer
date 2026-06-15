@@ -182,7 +182,7 @@ export default function ReportPage() {
                 <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
                   <div className="bg-[var(--color-surface-2)] px-4 py-2">
                     <p className="label-sm font-medium text-[var(--color-text-muted)]">
-                      Proposed actions ({summary.optimizer ?? optimizer}) — advisory
+                      Proposed actions ({report.optimizer ?? optimizer}) — advisory
                     </p>
                   </div>
                   <table className="w-full text-sm">
