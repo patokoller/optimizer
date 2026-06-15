@@ -257,6 +257,42 @@ def _subhead(ss, text):
                      ParagraphStyle("sub", parent=ss["H3"], textColor=ACCENT, spaceAfter=3))
 
 
+def _market_backdrop(ss, macro, content_w):
+    """Real, sourced macro snapshot: a compact stat strip (fed funds, CPI, curve,
+    VIX) + a regime line + source attribution. Returns a flowable list."""
+    def fpct(x, d=2):
+        return "-" if x is None else f"{x:.{d}f}%"
+
+    curve = macro.get("yield_curve")
+    curve_str = "-" if curve is None else (f"{curve:+.2f}" + ("  inv." if curve < 0 else ""))
+    vix = macro.get("vix")
+    vix_str = "-" if vix is None else f"{vix:.1f}"
+
+    stats = [
+        ("Fed funds", fpct(macro.get("fed_funds")), INK),
+        ("CPI (YoY)", fpct(macro.get("cpi_yoy"), 1), INK),
+        ("10Y-2Y curve", curve_str, RED if (curve is not None and curve < 0) else INK),
+        ("VIX", vix_str, INK),
+    ]
+    out = [_subhead(ss, "Market backdrop"), _stat_panel(ss, stats, content_w), Spacer(1, 5)]
+
+    regime_label = macro.get("regime_label")
+    if regime_label:
+        desc = macro.get("regime_description") or ""
+        tr = macro.get("transition_risk")
+        line = f"<b>Regime:</b> {regime_label}"
+        if desc:
+            line += f" — {desc}"
+        if tr:
+            line += f"  (transition risk: {tr})"
+        out.append(Paragraph(line, ss["Small"]))
+    src = macro.get("source") or "FRED / Alpha Vantage"
+    asof = f", as of {macro['as_of']}" if macro.get("as_of") else ""
+    out.append(Paragraph(f"Source: {src}{asof}. Macro figures are observed data, not forecasts.", ss["Tiny"]))
+    out.append(Spacer(1, 9))
+    return out
+
+
 def _stat_panel(ss, stats, content_w):
     """Julius-Baer-style 'key figures' band: a row of label/value cells on a tint."""
     n = len(stats)
@@ -488,15 +524,20 @@ def build_report_pdf(data: dict) -> bytes:
 
     # ── Review & outlook (Julius-Baer style) ─────────────────────────────────
     review = data.get("review", {}) or {}
+    macro = data.get("macro", {}) or {}
     if review.get("key_developments") or review.get("future_positioning"):
-        story.append(KeepTogether(
-            _section(ss, "What happened, where it's heading", "Review & outlook", content_w) + [
-                _subhead(ss, "Key developments last month"),
-                Paragraph(review.get("key_developments", ""), ss["Body"]),
-                Spacer(1, 9),
-                _subhead(ss, "Future positioning"),
-                Paragraph(review.get("future_positioning", ""), ss["Body"]),
-            ]))
+        block = _section(ss, "What happened, where it's heading", "Review & outlook", content_w)
+        # Market backdrop (real, sourced macro) leads — like a private-bank factsheet
+        if macro.get("fed_funds") is not None or macro.get("vix") is not None:
+            block += _market_backdrop(ss, macro, content_w)
+        block += [
+            _subhead(ss, "Key developments last month"),
+            Paragraph(review.get("key_developments", ""), ss["Body"]),
+            Spacer(1, 9),
+            _subhead(ss, "Future positioning"),
+            Paragraph(review.get("future_positioning", ""), ss["Body"]),
+        ]
+        story.append(KeepTogether(block))
         story.append(Spacer(1, 16))
 
     # ── Advisor's View ───────────────────────────────────────────────────────

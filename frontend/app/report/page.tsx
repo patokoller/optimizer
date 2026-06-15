@@ -170,6 +170,39 @@ export default function ReportPage() {
               {(summary.review?.keyDevelopments || summary.review?.futurePositioning) && (
                 <div className="space-y-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
                   <p className="label-sm font-medium text-[var(--color-text-muted)]">Review &amp; outlook</p>
+                  {/* Market backdrop — real, sourced macro */}
+                  {summary.macro && (summary.macro.fedFunds != null || summary.macro.vix != null) && (
+                    <div className="rounded-md bg-[var(--color-surface-2)] p-3">
+                      <p className="label-sm mb-2 font-medium text-[var(--color-primary)]">Market backdrop</p>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        {([
+                          ["Fed funds", summary.macro.fedFunds, (v: number) => `${v.toFixed(2)}%`],
+                          ["CPI (YoY)", summary.macro.cpiYoy, (v: number) => `${v.toFixed(1)}%`],
+                          ["10Y-2Y", summary.macro.yieldCurve, (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}${v < 0 ? " inv" : ""}`],
+                          ["VIX", summary.macro.vix, (v: number) => v.toFixed(1)],
+                        ] as const).map(([label, val, fmt]) => (
+                          <div key={label}>
+                            <p className="label-sm text-[var(--color-text-muted)]">{label}</p>
+                            <p className={cn("font-mono text-sm font-semibold tabular-nums",
+                              label === "10Y-2Y" && typeof val === "number" && val < 0
+                                ? "text-[var(--color-error)]" : "text-[var(--color-text)]")}>
+                              {typeof val === "number" ? fmt(val) : "—"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      {summary.macro.regimeLabel && (
+                        <p className="label-sm mt-2 text-[var(--color-text-muted)]">
+                          <span className="font-medium text-[var(--color-text)]">Regime:</span> {summary.macro.regimeLabel}
+                          {summary.macro.transitionRisk ? ` · transition risk ${summary.macro.transitionRisk}` : ""}
+                        </p>
+                      )}
+                      <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+                        Source: {summary.macro.source ?? "FRED / Alpha Vantage"}
+                        {summary.macro.asOf ? `, as of ${summary.macro.asOf}` : ""} · observed data, not forecasts
+                      </p>
+                    </div>
+                  )}
                   {summary.review.keyDevelopments && (
                     <div>
                       <p className="mb-1 text-sm font-medium text-[var(--color-primary)]">Key developments last month</p>

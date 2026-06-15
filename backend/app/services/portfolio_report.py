@@ -320,10 +320,21 @@ def fallback_review_outlook(data: dict) -> dict:
         moves.append(f"add to {n_add}")
     posture = (" and ".join(moves)) if moves else "hold current positioning"
     regime_clause = (f"With the regime read as {regime.lower()}, " if regime else "")
+    macro = data.get("macro") or {}
+    macro_bits = []
+    if macro.get("fed_funds") is not None:
+        macro_bits.append(f"fed funds at {macro['fed_funds']:.2f}%")
+    if macro.get("cpi_yoy") is not None:
+        macro_bits.append(f"CPI running {macro['cpi_yoy']:.1f}% YoY")
+    if macro.get("yield_curve") is not None:
+        c = macro["yield_curve"]
+        macro_bits.append(f"the 10Y-2Y curve at {c:+.2f}{' (inverted)' if c < 0 else ''}")
+    macro_clause = (f" Against a backdrop of {', '.join(macro_bits)}, " if macro_bits else " ")
     future_positioning = (
         f"{regime_clause}the model leans toward {'a more defensive tilt' if (n_trim + n_exit) > n_add else 'maintaining risk'}: "
         f"the proposal would {posture}, concentrating weight in the higher-scored, lower-volatility "
-        f"names. This is a model-derived stance from the scores, drift, and risk inputs above — not a "
+        f"names." + macro_clause +
+        f"this is a model-derived stance from the scores, drift, and risk inputs above — not a "
         f"market forecast — and is offered for the reader to weigh against their own view."
     )
     return {"key_developments": key_developments, "future_positioning": future_positioning}
@@ -342,6 +353,7 @@ def generate_review_outlook(llm_scorer, data: dict) -> dict:
         movers = data.get("movers") or []
         ctx = {
             "regime": data.get("regime"),
+            "macro": data.get("macro"),
             "movers": [{"ticker": m["ticker"], "period_return": round(m["period_return"], 4),
                         "contribution": round(m["contribution"], 4)} for m in movers],
             "holdings_semantics": [
@@ -362,7 +374,10 @@ def generate_review_outlook(llm_scorer, data: dict) -> dict:
             "the company's outlook and supply-chain/demand context — but ONLY using each holding's "
             "provided key_positives / key_risks. Do NOT invent macro or company facts not in that data.\n"
             "2) future_positioning: synthesize the regime and the proposed actions into a forward stance. "
-            "Explicitly frame it as model-derived from scores/drift/risk, not a market forecast.\n\n"
+            "If 'macro' figures are present (fed funds, CPI, 10Y-2Y curve, VIX — all real, sourced data), "
+            "reference the relevant ones factually to frame the backdrop; do not invent any macro number "
+            "not given. Explicitly frame the positioning as model-derived from scores/drift/risk, not a "
+            "market forecast.\n\n"
             "Return ONLY JSON with keys key_developments and future_positioning (strings).\n\n"
             f"{json.dumps(ctx, default=str)}"
         )
@@ -488,6 +503,7 @@ def build_report_data(
     watch_items = [t for t in tickers if drift.get(t) == "DETERIORATING"]
 
     regime = _latest_regime(db)
+    macro = _latest_macro(db)
 
     overall_scores = [s for s in scores_overall.values() if s is not None]
     overall_posture = sum(overall_scores) / len(overall_scores) if overall_scores else None
@@ -499,6 +515,7 @@ def build_report_data(
         "portfolio_name": portfolio.name,
         "as_of": end.strftime("%Y-%m-%d"),
         "regime": regime,
+        "macro": macro,
         "overall_posture_score": overall_posture,
         "movers": movers,
         "holdings": holding_rows,
@@ -540,9 +557,49 @@ def _latest_regime(db) -> dict:
     try:
         from app import models
         row = (db.query(models.MarketRegime)
-               .order_by(models.MarketRegime.created_at.desc()).first())
+               .order_by(models.MarketRegime.computed_at.desc()).first())
         if row:
             return {"label": row.regime_label, "confidence": row.regime_confidence}
     except Exception:
         pass
     return {}
+
+
+def _label_description(label: Optional[str]) -> Optional[str]:
+    """Map a regime label back to its description from the regime catalogue."""
+    if not label:
+        return None
+    try:
+        from app.ml.regime import REGIMES
+        for r in REGIMES.values():
+            if r.get("label") == label:
+                return r.get("description")
+    except Exception:
+        pass
+    return None
+
+
+def _latest_macro(db) -> dict:
+    """Real, sourced macro snapshot from the most recent regime computation
+    (FRED / Alpha Vantage). Empty dict if none has been computed yet."""
+    try:
+        from app import models
+        row = (db.query(models.MarketRegime)
+               .order_by(models.MarketRegime.computed_at.desc()).first())
+        if not row:
+            return {}
+        return {
+            "regime_label": row.regime_label,
+            "regime_description": _label_description(row.regime_label),
+            "dominant_factor": row.dominant_factor,
+            "transition_risk": row.transition_risk,
+            "vix": row.vix,
+            "yield_curve": row.yield_curve_10y2y,
+            "fed_funds": row.fed_funds_rate,
+            "cpi_yoy": row.cpi_yoy,
+            "as_of": row.computed_at.strftime("%Y-%m-%d") if row.computed_at else None,
+            "source": "FRED / Alpha Vantage",
+        }
+    except Exception as e:
+        logger.warning(f"macro snapshot lookup failed: {e}")
+        return {}

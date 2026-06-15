@@ -85,6 +85,17 @@ export interface ReportStatus {
     watchItems?: string[];
     narrative?: { execSummary?: string; riskCommentary?: string; closing?: string };
     review?: { keyDevelopments?: string; futurePositioning?: string };
+    macro?: {
+      regimeLabel?: string;
+      regimeDescription?: string;
+      transitionRisk?: string;
+      vix?: number | null;
+      yieldCurve?: number | null;
+      fedFunds?: number | null;
+      cpiYoy?: number | null;
+      asOf?: string | null;
+      source?: string;
+    };
     advisorView?: {
       stance?: string;
       conviction?: string;

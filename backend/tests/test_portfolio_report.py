@@ -161,13 +161,28 @@ def test_fallback_review_outlook_grounded_and_labeled():
     assert "neutral" in r["future_positioning"].lower()        # regime grounded
 
 
+def test_fallback_review_outlook_grounds_in_macro():
+    data = {
+        "regime": {"label": "Neutral / Mixed"},
+        "macro": {"fed_funds": 4.33, "cpi_yoy": 3.1, "yield_curve": -0.18, "vix": 18.4},
+        "watch_items": ["ZM"], "actions": [{"ticker": "PAYX", "action": "EXIT", "delta": -0.2}],
+        "movers": [{"ticker": "NVDA", "weight": 0.3, "period_return": 0.1, "contribution": 0.03}],
+        "holdings": [{"ticker": "NVDA", "drift_trend": "STABLE", "llm": {"key_positives": ["demand strong"]}}],
+    }
+    r = fallback_review_outlook(data)
+    fp = r["future_positioning"]
+    assert "4.33%" in fp and "3.1%" in fp and "-0.18" in fp and "inverted" in fp
+    assert "model-derived" in fp.lower()
+
+
 def test_fallback_review_outlook_empty_safe():
     r = fallback_review_outlook({"movers": [], "holdings": [], "actions": [], "regime": None})
     assert "No single position" in r["key_developments"]
     assert r["future_positioning"]
 
 
-
+# ── PDF render (smoke) ───────────────────────────────────────────────────────
+def test_build_report_pdf_smoke():
     data = {
         "portfolio_name": "Test", "as_of": "2026-06-15",
         "regime": {"label": "Neutral / Mixed", "confidence": 0.7},
@@ -178,6 +193,10 @@ def test_fallback_review_outlook_empty_safe():
                          "recommended_posture": "Trim the top, exit the weakest, hold the rest."},
         "review": {"key_developments": "NVDA led; ZM lagged.",
                    "future_positioning": "Model-derived defensive tilt."},
+        "macro": {"regime_label": "Neutral / Mixed", "regime_description": "No dominant signal.",
+                  "transition_risk": "medium", "vix": 18.4, "yield_curve": -0.18,
+                  "fed_funds": 4.33, "cpi_yoy": 3.1, "as_of": "2026-06-13",
+                  "source": "FRED / Alpha Vantage"},
         "movers": [{"ticker": "NVDA", "weight": 0.5, "period_return": 0.1, "contribution": 0.05}],
         "holdings": [
             {"ticker": "NVDA", "company": "NVIDIA", "weight": 0.5, "overall_score": 0.71,
@@ -209,3 +228,4 @@ def test_fallback_review_outlook_empty_safe():
     alltext = " ".join(p.extract_text() for p in r.pages)
     assert "Advisor" in alltext and "Executive summary" in alltext
     assert "Review" in alltext and "Future positioning" in alltext
+    assert "Market backdrop" in alltext and "FED FUNDS" in alltext and "4.33" in alltext  # macro view present
