@@ -11,7 +11,9 @@ import pandas as pd
 from app.ml import portfolio_risk as pr
 from app.services.portfolio_report import (
     derive_actions, compose_rationale, fallback_narrative, fallback_advisor_view,
+    fallback_review_outlook,
 )
+from app.ml.portfolio_risk import monthly_movers
 from app.services.report_pdf import build_report_pdf
 
 
@@ -122,8 +124,50 @@ def test_fallback_advisor_view_balanced_book():
     assert av["conviction"] in ("moderate", "high")  # not cautious when balanced
 
 
-# ── PDF render (smoke) ───────────────────────────────────────────────────────
-def test_build_report_pdf_smoke():
+def test_monthly_movers_orders_and_attributes():
+    rets = pd.DataFrame({
+        "A": np.r_[np.zeros(40), np.full(21, 0.0)],
+        "B": np.r_[np.zeros(40), np.full(21, -0.004)],
+        "C": np.r_[np.zeros(40), np.full(21, 0.006)],
+    })
+    m = monthly_movers(rets, {"A": 0.4, "B": 0.3, "C": 0.3}, window=21)
+    assert m[0]["ticker"] == "C" and m[-1]["ticker"] == "B"
+    assert abs(m[0]["contribution"] - 0.3 * m[0]["period_return"]) < 1e-9
+    assert monthly_movers(pd.DataFrame(), {"A": 1.0}) == []
+
+
+def test_fallback_review_outlook_grounded_and_labeled():
+    data = {
+        "regime": {"label": "Neutral / Mixed"}, "watch_items": ["PAYX", "ZM"],
+        "movers": [
+            {"ticker": "NVDA", "weight": 0.30, "period_return": 0.12, "contribution": 0.036},
+            {"ticker": "ZM", "weight": 0.20, "period_return": -0.09, "contribution": -0.018},
+        ],
+        "actions": [{"ticker": "PAYX", "action": "EXIT", "delta": -0.22},
+                    {"ticker": "AAPL", "action": "ADD", "delta": 0.10}],
+        "holdings": [
+            {"ticker": "NVDA", "drift_trend": "STABLE",
+             "llm": {"key_positives": ["Datacenter demand still outrunning supply"]}},
+            {"ticker": "ZM", "drift_trend": "DETERIORATING",
+             "llm": {"key_risks": ["Enterprise competition intensifying"]}},
+        ],
+    }
+    r = fallback_review_outlook(data)
+    assert set(r) == {"key_developments", "future_positioning"}
+    assert "NVDA" in r["key_developments"] and "+12.0%" in r["key_developments"]
+    assert "supply" in r["key_developments"].lower()          # supply-chain woven in
+    assert "PAYX, ZM" in r["key_developments"]                 # drift note
+    assert "model-derived" in r["future_positioning"].lower()  # honesty label
+    assert "neutral" in r["future_positioning"].lower()        # regime grounded
+
+
+def test_fallback_review_outlook_empty_safe():
+    r = fallback_review_outlook({"movers": [], "holdings": [], "actions": [], "regime": None})
+    assert "No single position" in r["key_developments"]
+    assert r["future_positioning"]
+
+
+
     data = {
         "portfolio_name": "Test", "as_of": "2026-06-15",
         "regime": {"label": "Neutral / Mixed", "confidence": 0.7},
@@ -132,6 +176,9 @@ def test_build_report_pdf_smoke():
         "advisor_view": {"stance": "I would reduce concentration first.", "conviction": "moderate",
                          "key_points": ["Top names dominate risk.", "Two watch-list names."],
                          "recommended_posture": "Trim the top, exit the weakest, hold the rest."},
+        "review": {"key_developments": "NVDA led; ZM lagged.",
+                   "future_positioning": "Model-derived defensive tilt."},
+        "movers": [{"ticker": "NVDA", "weight": 0.5, "period_return": 0.1, "contribution": 0.05}],
         "holdings": [
             {"ticker": "NVDA", "company": "NVIDIA", "weight": 0.5, "overall_score": 0.71,
              "strategies": {"technical": {"combined": 0.8}, "fundamental": {"combined": 0.6},
@@ -161,3 +208,4 @@ def test_build_report_pdf_smoke():
     # Advisor's view present in the document text
     alltext = " ".join(p.extract_text() for p in r.pages)
     assert "Advisor" in alltext and "Executive summary" in alltext
+    assert "Review" in alltext and "Future positioning" in alltext

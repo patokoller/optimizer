@@ -266,6 +266,121 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
         return fallback_advisor_view(data)
 
 
+# ── Review & outlook (Julius-Baer-style) ─────────────────────────────────────
+def _holding_lookup(data: dict) -> dict:
+    return {h["ticker"]: h for h in data.get("holdings", [])}
+
+
+def fallback_review_outlook(data: dict) -> dict:
+    """Deterministic 'Key developments' + 'Future positioning' prose, grounded in
+    computed movers, drift, and each holding's already-extracted semantic signals
+    (key_positives / key_risks). Never invents macro facts."""
+    movers = data.get("movers") or []
+    hl = _holding_lookup(data)
+    regime = (data.get("regime") or {}).get("label")
+    watch = data.get("watch_items") or []
+    actions = data.get("actions", [])
+
+    # Key developments: best/worst contributor + a drift note + one company outlook signal.
+    dev = []
+    if movers:
+        best = movers[0]
+        worst = movers[-1]
+        if best["contribution"] > 0:
+            dev.append(f"{best['ticker']} was the largest positive contributor over the trailing "
+                       f"month ({best['period_return']*100:+.1f}%)")
+        if worst["contribution"] < 0 and worst["ticker"] != best["ticker"]:
+            dev.append(f"{worst['ticker']} was the main detractor ({worst['period_return']*100:+.1f}%)")
+    # company outlook / supply-chain signal from the LLM's reading, for a named mover
+    outlook_bits = []
+    for m in (movers[:1] + movers[-1:]):
+        h = hl.get(m["ticker"], {})
+        llm = h.get("llm") or {}
+        sig = (llm.get("key_positives") or llm.get("key_risks") or [None])[0]
+        if sig:
+            outlook_bits.append(f"{m['ticker']}: {sig.lower()}")
+    drift_note = ""
+    if watch:
+        drift_note = (f" Management language at {', '.join(watch)} continued to soften across "
+                      f"recent calls.")
+    key_developments = (
+        ((". ".join(dev) + ".") if dev else "No single position dominated the month's move.")
+        + (f" On the company outlook, {('; '.join(outlook_bits))}." if outlook_bits else "")
+        + drift_note
+    )
+
+    # Future positioning: regime + proposed posture synthesis (model-derived).
+    n_exit = sum(1 for a in actions if a["action"] == "EXIT")
+    n_trim = sum(1 for a in actions if a["action"] == "TRIM")
+    n_add = sum(1 for a in actions if a["action"] == "ADD")
+    moves = []
+    if n_trim or n_exit:
+        moves.append(f"reduce {n_trim + n_exit} position(s)")
+    if n_add:
+        moves.append(f"add to {n_add}")
+    posture = (" and ".join(moves)) if moves else "hold current positioning"
+    regime_clause = (f"With the regime read as {regime.lower()}, " if regime else "")
+    future_positioning = (
+        f"{regime_clause}the model leans toward {'a more defensive tilt' if (n_trim + n_exit) > n_add else 'maintaining risk'}: "
+        f"the proposal would {posture}, concentrating weight in the higher-scored, lower-volatility "
+        f"names. This is a model-derived stance from the scores, drift, and risk inputs above — not a "
+        f"market forecast — and is offered for the reader to weigh against their own view."
+    )
+    return {"key_developments": key_developments, "future_positioning": future_positioning}
+
+
+def generate_review_outlook(llm_scorer, data: dict) -> dict:
+    """Ask Claude for concise 'Key developments last month' and 'Future positioning'
+    prose (Julius-Baer style). Company outlook / supply-chain context must come from
+    each holding's provided key_positives / key_risks — not invented. Falls back to a
+    deterministic version on any failure."""
+    try:
+        client = getattr(llm_scorer, "client", None)
+        if client is None:
+            return fallback_review_outlook(data)
+        hl = _holding_lookup(data)
+        movers = data.get("movers") or []
+        ctx = {
+            "regime": data.get("regime"),
+            "movers": [{"ticker": m["ticker"], "period_return": round(m["period_return"], 4),
+                        "contribution": round(m["contribution"], 4)} for m in movers],
+            "holdings_semantics": [
+                {"ticker": t, "drift": (h.get("drift_trend")),
+                 "key_positives": (h.get("llm") or {}).get("key_positives", [])[:3],
+                 "key_risks": (h.get("llm") or {}).get("key_risks", [])[:3]}
+                for t, h in hl.items()
+            ],
+            "actions": [{k: a[k] for k in ("ticker", "action", "delta")} for a in data.get("actions", [])],
+            "watch_items": data.get("watch_items"),
+        }
+        prompt = (
+            "You are writing two concise sections of a portfolio report, in the style of a private "
+            "bank factsheet. Be specific and name holdings, but keep each section to 4-6 sentences.\n\n"
+            "1) key_developments: what actually moved over the trailing month (use the 'movers' data — "
+            "name the biggest contributor and detractor with their returns), plus notable changes in "
+            "management tone (use 'drift'). For the named movers, add a short forward-looking note on "
+            "the company's outlook and supply-chain/demand context — but ONLY using each holding's "
+            "provided key_positives / key_risks. Do NOT invent macro or company facts not in that data.\n"
+            "2) future_positioning: synthesize the regime and the proposed actions into a forward stance. "
+            "Explicitly frame it as model-derived from scores/drift/risk, not a market forecast.\n\n"
+            "Return ONLY JSON with keys key_developments and future_positioning (strings).\n\n"
+            f"{json.dumps(ctx, default=str)}"
+        )
+        resp = client.messages.create(
+            model=llm_scorer.model, max_tokens=900, temperature=0.3,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = json.loads(raw)
+        if parsed.get("key_developments") and parsed.get("future_positioning"):
+            return {"key_developments": parsed["key_developments"],
+                    "future_positioning": parsed["future_positioning"]}
+        return fallback_review_outlook(data)
+    except Exception as e:
+        logger.warning(f"Review/outlook generation failed ({e}) — using deterministic fallback")
+        return fallback_review_outlook(data)
+
+
 def _returns_from_bars(prices_df: pd.DataFrame) -> pd.DataFrame:
     """Pivot OHLCV long frame (date,ticker,close) → wide daily returns."""
     if prices_df is None or prices_df.empty:
@@ -377,11 +492,15 @@ def build_report_data(
     overall_scores = [s for s in scores_overall.values() if s is not None]
     overall_posture = sum(overall_scores) / len(overall_scores) if overall_scores else None
 
+    from app.ml.portfolio_risk import monthly_movers
+    movers = monthly_movers(returns_df, weights_current, window=21)
+
     data = {
         "portfolio_name": portfolio.name,
         "as_of": end.strftime("%Y-%m-%d"),
         "regime": regime,
         "overall_posture_score": overall_posture,
+        "movers": movers,
         "holdings": holding_rows,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,
@@ -398,6 +517,7 @@ def build_report_data(
     }
     data["narrative"] = generate_narrative(llm_scorer, data)
     data["advisor_view"] = generate_advisor_view(llm_scorer, data)
+    data["review"] = generate_review_outlook(llm_scorer, data)
     return data
 
 

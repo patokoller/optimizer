@@ -251,6 +251,12 @@ def _section(ss, kicker, title, content_w):
     ]
 
 
+def _subhead(ss, text):
+    """Small accent subsection header (Julius-Baer 'Key developments' style)."""
+    return Paragraph(f"<font color='{_hex(ACCENT)}'>{text}</font>",
+                     ParagraphStyle("sub", parent=ss["H3"], textColor=ACCENT, spaceAfter=3))
+
+
 def _stat_panel(ss, stats, content_w):
     """Julius-Baer-style 'key figures' band: a row of label/value cells on a tint."""
     n = len(stats)
@@ -439,6 +445,8 @@ def build_report_pdf(data: dict) -> bytes:
         "regime": (data.get("regime") or {}).get("label"),
     }
     contents = ["Executive summary"]
+    if (data.get("review") or {}).get("key_developments"):
+        contents.append("Review & outlook")
     if advisor.get("stance"):
         contents.append("Advisor's view")
     contents += ["Holdings & allocation", "Risk analytics", "Proposed actions"]
@@ -477,6 +485,19 @@ def build_report_pdf(data: dict) -> bytes:
         ("Watch items", str(watch_n), RED if watch_n else INK),
     ], content_w))
     story.append(Spacer(1, 16))
+
+    # ── Review & outlook (Julius-Baer style) ─────────────────────────────────
+    review = data.get("review", {}) or {}
+    if review.get("key_developments") or review.get("future_positioning"):
+        story.append(KeepTogether(
+            _section(ss, "What happened, where it's heading", "Review & outlook", content_w) + [
+                _subhead(ss, "Key developments last month"),
+                Paragraph(review.get("key_developments", ""), ss["Body"]),
+                Spacer(1, 9),
+                _subhead(ss, "Future positioning"),
+                Paragraph(review.get("future_positioning", ""), ss["Body"]),
+            ]))
+        story.append(Spacer(1, 16))
 
     # ── Advisor's View ───────────────────────────────────────────────────────
     if advisor.get("stance"):

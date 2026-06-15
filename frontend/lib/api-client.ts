@@ -84,6 +84,7 @@ export interface ReportStatus {
     actions?: ReportAction[];
     watchItems?: string[];
     narrative?: { execSummary?: string; riskCommentary?: string; closing?: string };
+    review?: { keyDevelopments?: string; futurePositioning?: string };
     advisorView?: {
       stance?: string;
       conviction?: string;

@@ -166,6 +166,25 @@ export default function ReportPage() {
                 </div>
               )}
 
+              {/* Review & outlook */}
+              {(summary.review?.keyDevelopments || summary.review?.futurePositioning) && (
+                <div className="space-y-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
+                  <p className="label-sm font-medium text-[var(--color-text-muted)]">Review &amp; outlook</p>
+                  {summary.review.keyDevelopments && (
+                    <div>
+                      <p className="mb-1 text-sm font-medium text-[var(--color-primary)]">Key developments last month</p>
+                      <p className="text-sm leading-relaxed text-[var(--color-text)]">{summary.review.keyDevelopments}</p>
+                    </div>
+                  )}
+                  {summary.review.futurePositioning && (
+                    <div>
+                      <p className="mb-1 text-sm font-medium text-[var(--color-primary)]">Future positioning</p>
+                      <p className="text-sm leading-relaxed text-[var(--color-text)]">{summary.review.futurePositioning}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Advisor's View — the differentiator */}
               {summary.advisorView?.stance && (
                 <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">

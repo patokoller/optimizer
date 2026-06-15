@@ -84,6 +84,38 @@ def sector_weights(weights: dict[str, float], sectors: dict[str, str]) -> dict[s
     return dict(sorted(out.items(), key=lambda kv: kv[1], reverse=True))
 
 
+def monthly_movers(
+    returns_df: pd.DataFrame,
+    weights: dict[str, float],
+    window: int = 21,
+) -> list[dict]:
+    """Per-holding trailing-window return and weighted contribution to the
+    portfolio's move over that window. Used for the report's 'what moved last
+    month' narrative. Returns rows sorted by contribution (best → worst).
+
+    contribution ≈ weight × compounded window return (a first-order attribution,
+    not a full Brinson decomposition — honest enough for a narrative)."""
+    if returns_df is None or returns_df.empty:
+        return []
+    tail = returns_df.tail(window)
+    rows = []
+    for t, w in weights.items():
+        if t not in tail.columns or not w:
+            continue
+        series = tail[t].dropna()
+        if series.empty:
+            continue
+        comp = float((1.0 + series).prod() - 1.0)  # compounded window return
+        rows.append({
+            "ticker": t,
+            "weight": float(w),
+            "period_return": comp,
+            "contribution": float(w) * comp,
+        })
+    rows.sort(key=lambda r: r["contribution"], reverse=True)
+    return rows
+
+
 def risk_summary(
     returns_df: pd.DataFrame,
     weights: dict[str, float],
