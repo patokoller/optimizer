@@ -230,7 +230,8 @@ def run_score_job(self, run_id: str, portfolio_id: str, frequency: str):
                     news_context=enriched.get("news", ""),
                 )
             logger.info(f"Submitting LLM batch: {len(prompts)} tickers")
-            llm_scores = llm_scorer.score_batch(prompts)
+            from app.ml.llm_cache import score_batch_cached
+            llm_scores = score_batch_cached(db, llm_scorer, prompts, rebalance_date.strftime("%Y-%m"))
             if not llm_scores:
                 llm_failed_global = True
                 warnings_list.append("LLM_SCORE_FAILED: Batch API returned no results")
@@ -930,7 +931,8 @@ def run_discovery_job(self, discovery_run_id: str):
                 news_context=enriched.get("news", ""),
             )
         logger.info(f"Submitting LLM batch: {len(prompts)} tickers")
-        llm_scores = llm_scorer.score_batch(prompts)
+        from app.ml.llm_cache import score_batch_cached
+        llm_scores = score_batch_cached(db, llm_scorer, prompts, rebalance_date.strftime("%Y-%m"))
         if not llm_scores:
             logger.warning("LLM batch returned no results — scores will use w=1.0 fallback")
 

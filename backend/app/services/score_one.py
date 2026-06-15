@@ -217,7 +217,9 @@ def score_one(
             period=rebalance_date.strftime("%Y-%m") if rebalance_date else "",
             filing_context=filing_ctx,
         )
-        llm_result = llm_scorer.score_two_stage_sync(ticker, prompt)
+        from app.ml.llm_cache import score_sync_cached
+        period = rebalance_date.strftime("%Y-%m") if rebalance_date else ""
+        llm_result = score_sync_cached(db, llm_scorer, ticker, prompt, period)
     except Exception as e:
         logger.warning(f"score_one: LLM scoring failed for {ticker}: {e}")
 

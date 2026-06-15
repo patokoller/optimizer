@@ -309,11 +309,24 @@ def test_assemble_respects_bundle_strategy_subset():
 
 
 # ── score_one orchestrator ─────────────────────────────────────────────────
+class _NullCacheDB:
+    """Minimal db whose cache queries always miss and writes no-op."""
+    def query(self, *a):
+        class _Q:
+            def filter(self, *a): return self
+            def first(self): return None
+            def delete(self, *a, **k): return 0
+        return _Q()
+    def add(self, *a): pass
+    def commit(self): pass
+    def rollback(self): pass
+
+
 def test_score_one_no_bundle(monkeypatch):
     import app.services.score_one as so
 
     monkeypatch.setattr(so, "load_latest_bundle", lambda db: None)
-    out = so.score_one(None, "nvda", alpaca=object(), av=object(),
+    out = so.score_one(_NullCacheDB(), "nvda", alpaca=object(), av=object(),
                        edgar=object(), llm_scorer=object())
     assert out["error"] == "no_model_bundle"
 
@@ -356,7 +369,7 @@ def test_score_one_happy_path(monkeypatch):
                     "key_positives": ["p"], "key_risks": ["r"], "confidence": "medium",
                     "two_stage": True, "fact_sheet": {"x": 1}}
 
-    out = so.score_one(None, "nvda", alpaca=A(), av=V(), edgar=E(), llm_scorer=L())
+    out = so.score_one(_NullCacheDB(), "nvda", alpaca=A(), av=V(), edgar=E(), llm_scorer=L())
     assert out["ticker"] == "NVDA"
     assert out["overall_score"] is not None
     assert out["data_availability"] == {"prices": True, "fundamentals": True, "filings": True}
@@ -394,6 +407,6 @@ def test_score_one_full_degradation(monkeypatch):
         def score_two_stage_sync(self, *a):
             return None
 
-    out = so.score_one(None, "zzzz", alpaca=A(), av=V(), edgar=E(), llm_scorer=L())
+    out = so.score_one(_NullCacheDB(), "zzzz", alpaca=A(), av=V(), edgar=E(), llm_scorer=L())
     assert out["error"] == "no_usable_data"
     assert out["data_availability"]["prices"] is False

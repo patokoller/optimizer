@@ -421,3 +421,25 @@ class ModelBundle(Base):
     blob          = Column(LargeBinary, nullable=False)    # pickled {strategy: fitted_model}
     blob_bytes    = Column(Integer)                        # size for monitoring
     created_at    = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class LLMScoreCache(Base):
+    """
+    Per-ticker-per-month cache of LLM scores, keyed by a fingerprint of the
+    prompt. Because the prompt encodes all semantic inputs (filings, transcripts,
+    peer standing, macro, drift), an unchanged input set yields an identical
+    fingerprint → cache hit; any new filing/transcript/macro shift changes the
+    prompt → new fingerprint → re-score. Avoids re-paying for unchanged inputs
+    on repeat runs and on-demand searches.
+    """
+    __tablename__ = "llm_score_cache"
+    id          = Column(String, primary_key=True, default=_uuid)
+    ticker      = Column(String, index=True, nullable=False)
+    period      = Column(String, index=True, nullable=False)   # "YYYY-MM"
+    prompt_hash = Column(String, nullable=False)               # sha256 of prompt
+    result_json = Column(JSONB, nullable=False)                # parsed score dict
+    two_stage   = Column(Boolean, default=False)
+    created_at  = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    __table_args__ = (
+        UniqueConstraint("ticker", "period", "prompt_hash", name="uq_llm_cache_key"),
+    )
