@@ -166,6 +166,43 @@ export default function ReportPage() {
                 </div>
               )}
 
+              {/* Advisor's View — the differentiator */}
+              {summary.advisorView?.stance && (
+                <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+                  <div className="flex items-center justify-between bg-[var(--color-text)] px-5 py-2.5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-white">Advisor&apos;s View</p>
+                    {summary.advisorView.conviction && (
+                      <span className="text-xs font-medium capitalize text-white/80">
+                        {summary.advisorView.conviction} conviction
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-3 bg-[var(--color-surface-2)] p-5">
+                    <p className="text-sm leading-relaxed text-[var(--color-text)]">{summary.advisorView.stance}</p>
+                    {!!summary.advisorView.keyPoints?.length && (
+                      <div>
+                        <p className="label-sm mb-1 font-medium text-[var(--color-text)]">What matters most</p>
+                        <ul className="space-y-1">
+                          {summary.advisorView.keyPoints.map((pt, i) => (
+                            <li key={i} className="flex gap-2 text-sm text-[var(--color-text-muted)]">
+                              <span className="text-[var(--color-primary)]">•</span>
+                              <span>{pt}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {summary.advisorView.recommendedPosture && (
+                      <div className="border-l-2 border-[var(--color-primary)] bg-[var(--color-surface)] px-3 py-2">
+                        <p className="text-sm text-[var(--color-text)]">
+                          <span className="font-medium">Recommended posture:</span> {summary.advisorView.recommendedPosture}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Watch items */}
               {!!summary.watchItems?.length && (
                 <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 px-4 py-3">

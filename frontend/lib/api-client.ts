@@ -84,6 +84,13 @@ export interface ReportStatus {
     actions?: ReportAction[];
     watchItems?: string[];
     narrative?: { execSummary?: string; riskCommentary?: string; closing?: string };
+    advisorView?: {
+      stance?: string;
+      conviction?: string;
+      keyPoints?: string[];
+      recommendedPosture?: string;
+    };
+    overallPostureScore?: number | null;
     holdings?: { ticker: string; overallScore?: number | null; driftTrend?: string }[];
   } | null;
   pdfSize?: number;

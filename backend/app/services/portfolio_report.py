@@ -161,6 +161,111 @@ def generate_narrative(llm_scorer, data: dict) -> dict:
         return fallback_narrative(data)
 
 
+# ── Advisor's View (the differentiator) ──────────────────────────────────────
+def fallback_advisor_view(data: dict) -> dict:
+    """Deterministic Advisor's View when the LLM is unavailable. Opinionated but
+    grounded purely in the computed numbers, so the panel is never empty."""
+    cur, prop = data.get("risk_current", {}), data.get("risk_proposed", {})
+    holdings = data.get("holdings", [])
+    watch = data.get("watch_items") or []
+    hhi = cur.get("hhi")
+    sh_c, sh_p = cur.get("sharpe"), prop.get("sharpe")
+    # rank holdings by weight to name the concentration
+    top = sorted([h for h in holdings if h.get("weight")], key=lambda h: h["weight"], reverse=True)
+    top3 = top[:3]
+    top3_w = sum(h["weight"] for h in top3)
+    concentrated = hhi is not None and hhi > 0.2
+
+    conviction = "moderate"
+    if concentrated and watch:
+        conviction = "cautious"
+    elif sh_p is not None and sh_c is not None and sh_p - sh_c > 0.15:
+        conviction = "high"
+
+    pieces = []
+    if concentrated and top3:
+        names = ", ".join(h["ticker"] for h in top3)
+        pieces.append(f"the book leans heavily on a few names ({names} are roughly "
+                      f"{top3_w*100:.0f}% of capital)")
+    if watch:
+        pieces.append(f"{', '.join(watch)} pair weaker scores with deteriorating call language")
+    if sh_p is not None and sh_c is not None and sh_p > sh_c:
+        pieces.append(f"the proposed weights lift the Sharpe ratio from {sh_c:.2f} to {sh_p:.2f}, "
+                      f"mostly by lowering volatility rather than chasing return")
+    stance = ("Reading the numbers as an advisor would: "
+              + "; ".join(pieces) + ". "
+              + ("The clearest action is to reduce concentration and address the watch-list names "
+                 "before adding anywhere else." if concentrated or watch
+                 else "The allocation looks reasonably balanced; changes here are refinements, not fixes."))
+
+    key_points = []
+    if concentrated and top3:
+        key_points.append(f"Concentration is the dominant risk: the top {len(top3)} positions are "
+                          f"~{top3_w*100:.0f}% of capital.")
+    if watch:
+        key_points.append(f"{', '.join(watch)} are the clearest candidates to trim or exit on "
+                          f"weak scores and softening management tone.")
+    if sh_p is not None and sh_c is not None:
+        key_points.append("The proposed rebalance improves risk-adjusted return primarily by "
+                          "cutting volatility — a higher-quality kind of gain.")
+    if not key_points:
+        key_points.append("No single risk dominates; treat the proposals as incremental tuning.")
+
+    posture = ("Reduce the largest positions toward the proposed weights, act on the watch-list "
+               "names, and hold the remainder pending fresh data."
+               if concentrated or watch else
+               "Maintain current positioning and revisit at the next scoring cycle.")
+    return {"stance": stance, "conviction": conviction,
+            "key_points": key_points, "recommended_posture": posture}
+
+
+def generate_advisor_view(llm_scorer, data: dict) -> dict:
+    """Ask Claude to act as the advisor and give its own reasoned opinion — the
+    differentiating feature. Opinionated but advisory; grounded in the data.
+    Falls back to a deterministic view on any failure."""
+    try:
+        client = getattr(llm_scorer, "client", None)
+        if client is None:
+            return fallback_advisor_view(data)
+        ctx = {
+            "portfolio": data.get("portfolio_name"),
+            "regime": data.get("regime"),
+            "overall_posture_score": data.get("overall_posture_score"),
+            "risk_current": data.get("risk_current"),
+            "risk_proposed": data.get("risk_proposed"),
+            "watch_items": data.get("watch_items"),
+            "actions": [{k: a[k] for k in ("ticker", "action", "delta")} for a in data.get("actions", [])],
+            "holdings": [{"ticker": h["ticker"], "weight": h.get("weight"),
+                          "overall_score": h.get("overall_score"), "drift": h.get("drift_trend"),
+                          "key_risks": (h.get("llm") or {}).get("key_risks", [])[:2]}
+                         for h in data.get("holdings", [])],
+        }
+        prompt = (
+            "You are a seasoned portfolio advisor. From the JSON below, give YOUR OWN opinion on "
+            "this portfolio — not a neutral summary. Take a clear position on what matters and what "
+            "you would do, in a confident but advisory voice (you propose; the client decides). "
+            "Ground every claim in the data; invent no figures. Scores are an unvalidated research "
+            "signal, so lean on concentration, risk, drift and the proposed changes as much as on "
+            "scores. Return ONLY JSON with keys: stance (one opinionated paragraph, 4-6 sentences), "
+            "conviction (one of: high, moderate, low, cautious), key_points (list of 2-4 short "
+            "sentences), recommended_posture (one sentence stating what you would actually do).\n\n"
+            f"{json.dumps(ctx, default=str)}"
+        )
+        resp = client.messages.create(
+            model=llm_scorer.model, max_tokens=900, temperature=0.4,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = json.loads(raw)
+        if all(k in parsed for k in ("stance", "conviction", "key_points", "recommended_posture")):
+            if isinstance(parsed["key_points"], list) and parsed["stance"]:
+                return parsed
+        return fallback_advisor_view(data)
+    except Exception as e:
+        logger.warning(f"Advisor view generation failed ({e}) — using deterministic fallback")
+        return fallback_advisor_view(data)
+
+
 def _returns_from_bars(prices_df: pd.DataFrame) -> pd.DataFrame:
     """Pivot OHLCV long frame (date,ticker,close) → wide daily returns."""
     if prices_df is None or prices_df.empty:
@@ -269,10 +374,14 @@ def build_report_data(
 
     regime = _latest_regime(db)
 
+    overall_scores = [s for s in scores_overall.values() if s is not None]
+    overall_posture = sum(overall_scores) / len(overall_scores) if overall_scores else None
+
     data = {
         "portfolio_name": portfolio.name,
         "as_of": end.strftime("%Y-%m-%d"),
         "regime": regime,
+        "overall_posture_score": overall_posture,
         "holdings": holding_rows,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,
@@ -288,6 +397,7 @@ def build_report_data(
         },
     }
     data["narrative"] = generate_narrative(llm_scorer, data)
+    data["advisor_view"] = generate_advisor_view(llm_scorer, data)
     return data
 
 

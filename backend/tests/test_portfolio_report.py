@@ -10,7 +10,7 @@ import pandas as pd
 
 from app.ml import portfolio_risk as pr
 from app.services.portfolio_report import (
-    derive_actions, compose_rationale, fallback_narrative,
+    derive_actions, compose_rationale, fallback_narrative, fallback_advisor_view,
 )
 from app.services.report_pdf import build_report_pdf
 
@@ -89,19 +89,58 @@ def test_fallback_narrative_uses_numbers():
     assert "PAYX" in nar["exec_summary"]
 
 
+def test_fallback_advisor_view_is_opinionated_and_grounded():
+    data = {
+        "portfolio_name": "P", "risk_current": {"sharpe": 0.67, "hhi": 0.27, "annualized_vol": 0.27},
+        "risk_proposed": {"sharpe": 0.83, "annualized_vol": 0.21},
+        "watch_items": ["PAYX", "ZM"],
+        "actions": [], "overall_posture_score": 0.5,
+        "holdings": [
+            {"ticker": "NVDA", "weight": 0.30, "overall_score": 0.71, "drift_trend": "STABLE", "llm": {}},
+            {"ticker": "AAPL", "weight": 0.28, "overall_score": 0.55, "drift_trend": "STABLE", "llm": {}},
+            {"ticker": "PAYX", "weight": 0.22, "overall_score": 0.38, "drift_trend": "DETERIORATING", "llm": {}},
+            {"ticker": "ZM", "weight": 0.20, "overall_score": 0.33, "drift_trend": "DETERIORATING", "llm": {}},
+        ],
+    }
+    av = fallback_advisor_view(data)
+    assert set(av) == {"stance", "conviction", "key_points", "recommended_posture"}
+    assert av["conviction"] == "cautious"  # concentrated + watch list
+    assert "PAYX" in av["stance"] and "0.67" in av["stance"] and "0.83" in av["stance"]
+    assert isinstance(av["key_points"], list) and av["key_points"]
+    assert av["recommended_posture"]
+
+
+def test_fallback_advisor_view_balanced_book():
+    data = {
+        "portfolio_name": "P", "risk_current": {"sharpe": 0.7, "hhi": 0.12, "annualized_vol": 0.15},
+        "risk_proposed": {"sharpe": 0.72, "annualized_vol": 0.14}, "watch_items": [],
+        "actions": [], "overall_posture_score": 0.6,
+        "holdings": [{"ticker": t, "weight": 0.25, "overall_score": 0.6, "drift_trend": "STABLE", "llm": {}}
+                     for t in ("A", "B", "C", "D")],
+    }
+    av = fallback_advisor_view(data)
+    assert av["conviction"] in ("moderate", "high")  # not cautious when balanced
+
+
 # ── PDF render (smoke) ───────────────────────────────────────────────────────
 def test_build_report_pdf_smoke():
     data = {
         "portfolio_name": "Test", "as_of": "2026-06-15",
         "regime": {"label": "Neutral / Mixed", "confidence": 0.7},
+        "overall_posture_score": 0.52,
         "narrative": {"exec_summary": "E.", "risk_commentary": "R.", "closing": "C."},
+        "advisor_view": {"stance": "I would reduce concentration first.", "conviction": "moderate",
+                         "key_points": ["Top names dominate risk.", "Two watch-list names."],
+                         "recommended_posture": "Trim the top, exit the weakest, hold the rest."},
         "holdings": [
-            {"ticker": "NVDA", "weight": 0.5, "overall_score": 0.71,
+            {"ticker": "NVDA", "company": "NVIDIA", "weight": 0.5, "overall_score": 0.71,
              "strategies": {"technical": {"combined": 0.8}, "fundamental": {"combined": 0.6},
-                            "entropy": {"combined": 0.65}}, "drift_trend": "STABLE"},
-            {"ticker": "ZM", "weight": 0.5, "overall_score": 0.33,
+                            "entropy": {"combined": 0.65}}, "drift_trend": "STABLE",
+             "llm": {"key_positives": ["Demand strong"], "key_risks": ["Valuation rich"]}},
+            {"ticker": "ZM", "company": "Zoom", "weight": 0.5, "overall_score": 0.33,
              "strategies": {"technical": {"combined": 0.3}, "fundamental": {"combined": 0.35},
-                            "entropy": {"combined": 0.34}}, "drift_trend": "DETERIORATING"},
+                            "entropy": {"combined": 0.34}}, "drift_trend": "DETERIORATING",
+             "llm": {"key_positives": ["Net cash"], "key_risks": ["Growth stalled", "Competition"]}},
         ],
         "risk_current": {"annualized_return": 0.18, "annualized_vol": 0.27, "sharpe": 0.67,
                          "max_drawdown": -0.34, "hhi": 0.5, "n_positions": 2,
@@ -118,5 +157,7 @@ def test_build_report_pdf_smoke():
     assert pdf[:4] == b"%PDF"
     from pypdf import PdfReader
     r = PdfReader(io.BytesIO(pdf))
-    assert len(r.pages) >= 2
-    assert "Portfolio Analysis" in r.pages[0].extract_text()
+    assert len(r.pages) >= 3  # cover + content
+    # Advisor's view present in the document text
+    alltext = " ".join(p.extract_text() for p in r.pages)
+    assert "Advisor" in alltext and "Executive summary" in alltext
