@@ -115,6 +115,32 @@ def rank_normalize(raw_by_ticker: dict[str, Optional[float]]) -> dict[str, float
     return result
 
 
+def percentile_into(reference_values: list[float], x: float) -> float:
+    """
+    Rank a single value into a reference distribution, on the SAME scale that
+    rank_normalize produces. This is what lets an on-demand single-ticker score
+    be cross-sectionally comparable to scores computed during a full universe run.
+
+    Returns (count_below + 0.5 * count_equal) / n  ∈ (0, 1), where the counts are
+    taken over `reference_values` PLUS x itself (so a value at the extreme top of
+    the reference doesn't collapse to exactly 1.0, matching rank_normalize where
+    every member is ranked among the full set).
+
+    Empty reference → 0.5 (no basis to rank). NaNs in the reference are dropped.
+    """
+    ref = [
+        float(v) for v in reference_values
+        if v is not None and not (isinstance(v, float) and np.isnan(v))
+    ]
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return 0.5
+    x = float(x)
+    n = len(ref) + 1  # include x itself in the ranking population
+    below = sum(1 for v in ref if v < x)
+    equal = sum(1 for v in ref if v == x) + 1  # x ties with itself
+    return (below + 0.5 * equal) / n
+
+
 def select_top_n(scores: dict[str, float], n: int = 10) -> list[str]:
     """
     Select top-N tickers by score — equal-weighted portfolio formation.

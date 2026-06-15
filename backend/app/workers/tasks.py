@@ -945,6 +945,7 @@ def run_discovery_job(self, discovery_run_id: str):
 
         # ── ML scoring ─────────────────────────────────────────────
         fund_scores, tech_scores, entr_scores = {}, {}, {}
+        fund_model = tech_model = entr_model = None
 
         if fundamentals_df is not None:
             try:
@@ -964,6 +965,33 @@ def run_discovery_job(self, discovery_run_id: str):
                 entr_scores = entr_model.predict(clean_tickers, prices_df, rebalance_date)
             except Exception as e:
                 logger.error(f"Discovery tech/entropy model error: {e}")
+
+        # ── Persist trained models for on-demand single-ticker scoring ──
+        # Saves the fitted ensembles + each strategy's universe raw-ensemble
+        # vector so an ad-hoc ticker can be ranked into this run's distribution
+        # without retraining (training is the ~22-min cost of a run).
+        try:
+            from app.ml.model_bundle import save_bundle
+            save_bundle(
+                db,
+                run_id=discovery_run_id,
+                run_type="discovery",
+                rebalance_date=rebalance_date,
+                frequency=frequency,
+                universe=clean_tickers,
+                models_by_strategy={
+                    "fundamental": fund_model,
+                    "technical":   tech_model,
+                    "entropy":     entr_model,
+                },
+                score_dicts_by_strategy={
+                    "fundamental": fund_scores,
+                    "technical":   tech_scores,
+                    "entropy":     entr_scores,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Discovery model-bundle save failed (non-fatal): {e}")
 
         # ── Risk metrics ───────────────────────────────────────────
         risk_metrics = {}

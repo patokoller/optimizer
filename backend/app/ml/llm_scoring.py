@@ -467,6 +467,76 @@ class LLMScorer:
             logger.error(f"Unexpected LLM error for {ticker}: {e}", exc_info=True)
             return None
 
+    def _call_sync(self, prompt: str, max_tokens: int = 800) -> Optional[str]:
+        """One synchronous Claude text call. Returns raw text, or None on error."""
+        if self.client is None:
+            return None
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"Sync Claude call failed: {e}")
+            return None
+
+    def score_two_stage_sync(self, ticker: str, single_stage_prompt: str) -> Optional[dict]:
+        """
+        Synchronous two-stage score for ONE ticker (on-demand path), mirroring the
+        batch two-stage logic without the batch poll: stage 1 extracts a fact
+        sheet, stage 2 scores from it with the calibration/arithmetic contract.
+
+        Falls back to a single synchronous call on the original prompt if the
+        ticker has no calibration marker (no extraction prompt) or if extraction
+        fails — so on-demand scoring never loses its number to the machinery.
+        Result is tagged "two_stage": bool and carries the extracted "fact_sheet"
+        (when available) for the single-stock detail view.
+        """
+        if self.client is None:
+            return None
+
+        # No two-stage requested, or no extractable materials → single call.
+        extraction_prompt = build_extraction_prompt(single_stage_prompt) if two_stage_enabled() else None
+        if extraction_prompt is None:
+            raw = self._call_sync(single_stage_prompt)
+            if raw is None:
+                return None
+            parsed = self._parse_score_json(ticker, raw)
+            if parsed is not None:
+                parsed["two_stage"] = False
+            return parsed
+
+        # Stage 1 — fact extraction.
+        fact_raw = self._call_sync(extraction_prompt)
+        fact_sheet = None
+        if fact_raw is not None:
+            try:
+                fact_sheet = json.loads(self._strip_fences(fact_raw))
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.warning(f"Sync extraction parse failed for {ticker}: {e} — falling back to single-stage")
+
+        if not isinstance(fact_sheet, dict):
+            raw = self._call_sync(single_stage_prompt)
+            if raw is None:
+                return None
+            parsed = self._parse_score_json(ticker, raw)
+            if parsed is not None:
+                parsed["two_stage"] = False
+            return parsed
+
+        # Stage 2 — score from the fact sheet.
+        stage2_raw = self._call_sync(build_stage2_prompt(ticker, fact_sheet))
+        if stage2_raw is None:
+            return None
+        parsed = self._parse_score_json(ticker, stage2_raw)
+        if parsed is not None:
+            parsed["two_stage"] = True
+            parsed["fact_sheet"] = fact_sheet
+        return parsed
+
     def build_prompt(
         self,
         ticker: str,

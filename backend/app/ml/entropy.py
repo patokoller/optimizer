@@ -292,6 +292,7 @@ class EntropyScorer:
             norm = norm_by_ticker.get(ticker, 0.5)
             results[ticker] = {
                 "score":              norm,
+                "raw_ensemble":       r.get("raw_ensemble"),
                 "xgboost":            r.get("xgboost"),
                 "lightgbm":           r.get("lightgbm"),
                 "catboost":           r.get("catboost"),

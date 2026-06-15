@@ -246,6 +246,7 @@ class FundamentalScorer:
             norm = norm_by_ticker.get(ticker, 0.5)
             results[ticker] = {
                 "score":              norm,
+                "raw_ensemble":       r.get("raw_ensemble"),
                 "ridge":              r.get("ridge"),
                 "xgboost":            r.get("xgboost"),
                 "rf":                 r.get("rf"),

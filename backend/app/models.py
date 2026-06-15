@@ -7,7 +7,7 @@ import enum
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean, DateTime,
-    ForeignKey, Enum, Text, ARRAY, UniqueConstraint,
+    ForeignKey, Enum, Text, ARRAY, UniqueConstraint, LargeBinary,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -397,3 +397,27 @@ class DiscoveryScore(Base):
     regime_label         = Column(String)   # e.g. "Risk-On Momentum"
     created_at           = Column(DateTime, default=datetime.utcnow, nullable=False)
     run                  = relationship("DiscoveryRun", back_populates="scores")
+
+
+class ModelBundle(Base):
+    """
+    A persisted set of trained scoring models from a single run, enabling
+    on-demand single-ticker scoring WITHOUT retraining (training is the ~22-min
+    cost of a run). Stores the pickled fitted models plus each strategy's
+    universe raw-ensemble vector, so a new ad-hoc ticker can be ranked into the
+    same cross-sectional distribution the run used (see scoring.percentile_into).
+    """
+    __tablename__ = "model_bundles"
+    id            = Column(String, primary_key=True, default=_uuid)
+    run_id        = Column(String, index=True)            # source discovery/score run id
+    run_type      = Column(String, nullable=False)        # 'discovery' | 'score'
+    rebalance_date = Column(DateTime)
+    frequency     = Column(String, default="monthly")     # 'monthly' | 'quarterly'
+    universe      = Column(JSONB)                          # list[str] tickers trained/normalized against
+    strategies    = Column(JSONB)                          # list[str] strategies present in the blob
+    # {strategy: {ticker: raw_ensemble_float}} — the reference distributions for percentile_into
+    raw_vectors   = Column(JSONB)
+    lib_versions  = Column(JSONB)                          # {lib: version} captured at save time
+    blob          = Column(LargeBinary, nullable=False)    # pickled {strategy: fitted_model}
+    blob_bytes    = Column(Integer)                        # size for monitoring
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
