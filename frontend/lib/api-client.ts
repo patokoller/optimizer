@@ -63,6 +63,36 @@ export interface SearchScoreResult {
   message?: string;
 }
 
+export interface ReportAction {
+  ticker: string;
+  action: "ADD" | "TRIM" | "EXIT" | "HOLD";
+  delta: number;
+  rationale: string;
+}
+
+export interface ReportStatus {
+  reportId: string;
+  portfolioId: string;
+  status: "pending" | "running" | "completed" | "failed";
+  optimizer: string;
+  summary?: {
+    portfolioName: string;
+    asOf: string;
+    overallScore?: number | null;
+    riskCurrent?: Record<string, number | null>;
+    riskProposed?: Record<string, number | null>;
+    actions?: ReportAction[];
+    watchItems?: string[];
+    narrative?: { execSummary?: string; riskCommentary?: string; closing?: string };
+    holdings?: { ticker: string; overallScore?: number | null; driftTrend?: string }[];
+  } | null;
+  pdfSize?: number;
+  hasPdf?: boolean;
+  error?: string | null;
+  createdAt?: string | null;
+  completedAt?: string | null;
+}
+
 // ── snake_case → camelCase (applied to all API responses) ────────────────
 function toCamel(s: string): string {
   return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -181,6 +211,21 @@ class APIClient {
   async scoreTicker(ticker: string): Promise<SearchScoreResult> {
     const { data } = await this.http.post(`/api/search/score`, { ticker });
     return data as SearchScoreResult;
+  }
+
+  // ── Portfolio analysis report (Feature B) ─────────────────────────
+  async runReport(portfolioId: string, optimizer: "MVO" | "HRP" = "MVO"): Promise<{ reportId: string; status: string }> {
+    const { data } = await this.http.post(`/api/report/run`, { portfolio_id: portfolioId, optimizer });
+    return data;
+  }
+
+  async getReport(reportId: string): Promise<ReportStatus> {
+    const { data } = await this.http.get(`/api/report/${reportId}`);
+    return data as ReportStatus;
+  }
+
+  reportDownloadUrl(reportId: string): string {
+    return `${BASE_URL}/api/report/${reportId}/download`;
   }
 
   // ── Optimization ──────────────────────────────────────────────────

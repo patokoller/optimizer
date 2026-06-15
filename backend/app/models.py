@@ -443,3 +443,19 @@ class LLMScoreCache(Base):
     __table_args__ = (
         UniqueConstraint("ticker", "period", "prompt_hash", name="uq_llm_cache_key"),
     )
+
+
+class PortfolioReport(Base):
+    """A generated portfolio-analysis report (Feature B): async job status plus
+    the rendered PDF (bytea) and a JSON summary for on-screen preview."""
+    __tablename__ = "portfolio_reports"
+    id            = Column(String, primary_key=True, default=_uuid)
+    portfolio_id  = Column(String, ForeignKey("portfolios.id"), index=True)
+    status        = Column(Enum(RunStatus), default=RunStatus.pending, nullable=False)
+    optimizer     = Column(String, default="MVO")
+    summary_json  = Column(JSONB)        # ReportData minus the PDF, for preview
+    pdf_bytes     = Column(LargeBinary)  # rendered report
+    pdf_size      = Column(Integer)
+    error_log     = Column(Text)
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at  = Column(DateTime)

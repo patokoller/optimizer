@@ -14,6 +14,7 @@ import {
   Activity,
   Zap,
   Search,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { useStore } from "@/store";
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { href: "/search",     label: "Stock Search",     icon: Search          },
   { href: "/rebalance",  label: "Rebalance",        icon: RefreshCw       },
   { href: "/backtest",   label: "Backtest",         icon: TrendingUp      },
+  { href: "/report",     label: "Analysis Report",  icon: FileText        },
   { href: "/export",     label: "Trade Export",     icon: Download        },
   { href: "/settings",   label: "Settings",         icon: Settings        },
 ];

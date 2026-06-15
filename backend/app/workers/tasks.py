@@ -1380,3 +1380,57 @@ def backfill_forward_returns(self):
         raise self.retry(exc=e)
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, max_retries=0)
+def run_portfolio_report_job(self, report_id: str):
+    """Generate a portfolio-analysis report (Feature B): assemble ReportData,
+    render the PDF, and store both on the PortfolioReport row."""
+    from datetime import datetime
+    from app.database import SessionLocal
+    from app import models
+    from app.services.portfolio_report import build_report_data
+    from app.services.report_pdf import build_report_pdf
+
+    db = SessionLocal()
+    report = db.query(models.PortfolioReport).filter(
+        models.PortfolioReport.id == report_id
+    ).first()
+    if report is None:
+        logger.error(f"PortfolioReport {report_id} not found")
+        db.close()
+        return
+
+    try:
+        report.status = models.RunStatus.running
+        db.commit()
+
+        data = build_report_data(db, report.portfolio_id, optimizer=report.optimizer or "MVO")
+        if data.get("error"):
+            report.status = models.RunStatus.failed
+            report.error_log = data["error"]
+            db.commit()
+            logger.warning(f"Report {report_id}: {data['error']}")
+            return
+
+        pdf = build_report_pdf(data)
+        # Strip the PDF-only bulk from the JSON summary kept for on-screen preview.
+        summary = {k: v for k, v in data.items() if k != "stress_test"}
+        report.summary_json = summary
+        report.pdf_bytes = pdf
+        report.pdf_size = len(pdf)
+        report.status = models.RunStatus.completed
+        report.completed_at = datetime.utcnow()
+        db.commit()
+        logger.info(f"Report {report_id} complete — pdf={len(pdf)/1024:.0f}KB, "
+                    f"{len(data.get('holdings', []))} holdings")
+    except Exception as e:
+        logger.error(f"Report {report_id} failed: {e}", exc_info=True)
+        try:
+            report.status = models.RunStatus.failed
+            report.error_log = str(e)[:2000]
+            db.commit()
+        except Exception:
+            db.rollback()
+    finally:
+        db.close()
