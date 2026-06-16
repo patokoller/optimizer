@@ -90,13 +90,15 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          railway link ${{ secrets.RAILWAY_PROJECT_ID }} \
+          railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} \
             --environment ${{ github.event.inputs.environment || 'production' }} \
             --service ${{ secrets.RAILWAY_API_SERVICE_ID }}
           railway up --detach
+          echo "✅ Backend API deployment triggered"
 
       - name: Wait for health check
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
         run: |
           for i in $(seq 1 24); do
@@ -111,8 +113,9 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          railway run --service ${{ secrets.RAILWAY_API_SERVICE_ID }} \
-            alembic upgrade head
+          railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} \
+            --service ${{ secrets.RAILWAY_API_SERVICE_ID }}
+          railway run alembic upgrade head
 
   # ── Deploy worker → Railway ───────────────────────────────────────────
   deploy-worker:
@@ -132,7 +135,8 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          railway link ${{ secrets.RAILWAY_PROJECT_ID }} \
+          railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} \
             --environment ${{ github.event.inputs.environment || 'production' }} \
             --service ${{ secrets.RAILWAY_WORKER_SERVICE_ID }}
           railway up --detach
+          echo "✅ Worker deployment triggered"
