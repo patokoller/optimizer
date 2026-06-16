@@ -1,8 +1,10 @@
 name: Deploy
 
 on:
-  # Auto-deploy on push to main only after secrets are configured.
-  # Until then, trigger manually via workflow_dispatch.
+  # Auto-deploy on merge to main. Manual dispatch remains available for
+  # targeted (frontend/backend/worker) or staging deploys.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       target:
@@ -29,7 +31,7 @@ jobs:
     name: Deploy frontend → Vercel
     needs: ci-gate
     runs-on: ubuntu-latest
-    if: contains(fromJSON('["all","frontend"]'), github.event.inputs.target)
+    if: github.event_name == 'push' || contains(fromJSON('["all","frontend"]'), github.event.inputs.target)
     environment:
       name: ${{ github.event.inputs.environment || 'production' }}
       url: ${{ steps.vercel-deploy.outputs.url }}
@@ -75,7 +77,7 @@ jobs:
     name: Deploy backend → Railway
     needs: ci-gate
     runs-on: ubuntu-latest
-    if: contains(fromJSON('["all","backend"]'), github.event.inputs.target)
+    if: github.event_name == 'push' || contains(fromJSON('["all","backend"]'), github.event.inputs.target)
 
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +119,7 @@ jobs:
     name: Deploy worker → Railway
     needs: ci-gate
     runs-on: ubuntu-latest
-    if: contains(fromJSON('["all","worker"]'), github.event.inputs.target)
+    if: github.event_name == 'push' || contains(fromJSON('["all","worker"]'), github.event.inputs.target)
 
     steps:
       - uses: actions/checkout@v4
