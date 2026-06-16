@@ -524,7 +524,10 @@ def build_report_data(
     holding_rows = []
     sectors = {}
     for h in holdings:
-        payload = score_one(db, h.ticker, alpaca=alpaca, llm_scorer=llm_scorer, bundle=bundle)
+        # When no bundle exists yet, every score_one call would just return
+        # "no_model_bundle" — skip them (avoids N redundant DB loads + log spam).
+        payload = score_one(db, h.ticker, alpaca=alpaca, llm_scorer=llm_scorer,
+                            bundle=bundle) if bundle is not None else {}
         ov = payload.get("overall_score")
         scores_overall[h.ticker] = ov
         dtrend = _lookup_drift(db, h.ticker)
