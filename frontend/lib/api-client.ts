@@ -255,6 +255,21 @@ class APIClient {
     return `${BASE_URL}/api/report/${reportId}/download`;
   }
 
+  /**
+   * Fetch the rendered report PDF through the same axios instance the rest of
+   * the app uses, so it works regardless of whether NEXT_PUBLIC_API_URL is set
+   * to a browser-navigable origin. Returns a Blob the caller can save.
+   *
+   * Note: responseType "blob" bypasses the snake_case interceptor (it only
+   * transforms JSON objects), so binary content is returned untouched.
+   */
+  async getReportPdf(reportId: string): Promise<Blob> {
+    const { data } = await this.http.get(`/api/report/${reportId}/download`, {
+      responseType: "blob",
+    });
+    return data as Blob;
+  }
+
   // ── Optimization ──────────────────────────────────────────────────
   async optimizeDeepRL(
     portfolioId: string,
