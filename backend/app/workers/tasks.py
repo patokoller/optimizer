@@ -38,6 +38,19 @@ celery_app.conf.update(
     broker_transport_options={"visibility_timeout": 10800},
 )
 
+# Proactive bundle refresh: keep a freshly-trained model bundle available so the
+# user never has to manually run discovery. This schedule is DORMANT unless a
+# Celery beat process is running (e.g. the worker started with `--beat`, or a
+# separate `celery -A app.workers.tasks.celery_app beat` service). Even without
+# beat, the bundle stays available via the on-demand auto-kick in the report and
+# search paths (ensure_bundle_fresh); beat just keeps it warm proactively.
+celery_app.conf.beat_schedule = {
+    "refresh-model-bundle": {
+        "task": "app.workers.tasks.scheduled_bundle_refresh",
+        "schedule": timedelta(days=3),  # checks freshness; only retrains if stale
+    },
+}
+
 
 # ── Score Job ─────────────────────────────────────────────────────────────
 @celery_app.task(bind=True, max_retries=0)
@@ -1432,5 +1445,24 @@ def run_portfolio_report_job(self, report_id: str):
             db.commit()
         except Exception:
             db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=0)
+def scheduled_bundle_refresh(self):
+    """Beat-scheduled: ensure a fresh model bundle exists, training one in the
+    background only if it is missing or stale. No-op when the bundle is already
+    fresh, so running this frequently is cheap."""
+    from app.database import SessionLocal
+    from app.services.bundle_maintenance import ensure_bundle_fresh
+    db = SessionLocal()
+    try:
+        status = ensure_bundle_fresh(db)
+        logger.info(f"scheduled_bundle_refresh: {status}")
+        return status
+    except Exception as e:
+        logger.warning(f"scheduled_bundle_refresh failed: {e}")
+        return {"error": str(e)}
     finally:
         db.close()

@@ -160,6 +160,16 @@ export default function ReportPage() {
               </div>
 
               {/* Executive summary */}
+              {summary.scoresStatus && summary.scoresStatus !== "ready" && (
+                <div className="rounded-lg border-l-2 border-[var(--color-warning)] bg-[var(--color-surface-2)] px-4 py-3">
+                  <p className="text-sm text-[var(--color-text)]">
+                    <span className="font-medium">Scores are still preparing.</span>{" "}
+                    {summary.scoresStatus === "training"
+                      ? "The scoring models are being trained now (~20 min). Risk analytics and the market backdrop are ready; regenerate this report once training finishes to populate per-holding scores."
+                      : "No trained model is available yet — training starts automatically; regenerate shortly to populate scores."}
+                  </p>
+                </div>
+              )}
               {summary.narrative?.execSummary && (
                 <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
                   <p className="label-sm mb-1.5 font-medium text-[var(--color-text-muted)]">Executive summary</p>

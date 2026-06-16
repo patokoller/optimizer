@@ -105,6 +105,7 @@ export interface ReportStatus {
       recommendedPosture?: string;
     };
     overallPostureScore?: number | null;
+    scoresStatus?: "ready" | "training" | "absent";
     holdings?: { ticker: string; overallScore?: number | null; driftTrend?: string }[];
   } | null;
   pdfSize?: number;
@@ -235,6 +236,11 @@ class APIClient {
   }
 
   // ── Portfolio analysis report (Feature B) ─────────────────────────
+  async modelsStatus(): Promise<{ state: "ready" | "preparing" | "stale" | "absent"; exists: boolean; ageDays: number | null; refreshInProgress: boolean }> {
+    const { data } = await this.http.get(`/api/report/models/status`);
+    return data;
+  }
+
   async runReport(portfolioId: string, optimizer: "MVO" | "HRP" = "MVO"): Promise<{ reportId: string; status: string }> {
     const { data } = await this.http.post(`/api/report/run`, { portfolio_id: portfolioId, optimizer });
     return data;

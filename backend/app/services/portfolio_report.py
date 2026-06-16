@@ -451,6 +451,16 @@ def _returns_from_bars(prices_df: pd.DataFrame) -> pd.DataFrame:
     return wide.pct_change(fill_method=None).dropna(how="all")
 
 
+def _bundle_refresh_running(db) -> bool:
+    """True if a discovery/training run is currently pending or running (so a
+    score-less report can tell the user models are being prepared)."""
+    try:
+        from app.services.bundle_maintenance import bundle_status
+        return bool(bundle_status(db).get("refresh_in_progress"))
+    except Exception:
+        return False
+
+
 def build_report_data(
     db,
     portfolio_id: str,
@@ -567,6 +577,8 @@ def build_report_data(
         "overall_posture_score": overall_posture,
         "movers": movers,
         "scores_available": bundle is not None,
+        "scores_status": ("ready" if bundle is not None else
+                          ("training" if _bundle_refresh_running(db) else "absent")),
         "holdings": holding_rows,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,

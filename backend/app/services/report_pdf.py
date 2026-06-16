@@ -583,11 +583,16 @@ def build_report_pdf(data: dict) -> bytes:
     story.append(_scorecard_table(ss, holdings, content_w))
     if data.get("scores_available") is False:
         story.append(Spacer(1, 5))
-        story.append(_callout(ss, "Scores unavailable",
-                              "No trained model is available yet, so per-holding scores are blank. "
-                              "Run a discovery job to train and persist the models, then regenerate "
-                              "this report. Risk analytics and the market backdrop below are unaffected.",
-                              AMBER, content_w))
+        if data.get("scores_status") == "training":
+            msg = ("The scoring models are being trained now (this takes around 20 minutes). "
+                   "Per-holding scores are blank for the moment — regenerate this report once "
+                   "training finishes and they will populate. Risk analytics and the market "
+                   "backdrop below are unaffected.")
+        else:
+            msg = ("No trained model is available yet, so per-holding scores are blank. Training "
+                   "starts automatically when a report is requested; regenerate shortly. Risk "
+                   "analytics and the market backdrop below are unaffected.")
+        story.append(_callout(ss, "Scores unavailable", msg, AMBER, content_w))
     watch = data.get("watch_items") or []
     if watch:
         story.append(Spacer(1, 5))

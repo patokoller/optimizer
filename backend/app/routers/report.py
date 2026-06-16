@@ -52,8 +52,36 @@ def start_report(req: ReportRequest, db: Session = Depends(get_db)):
     )
     db.add(report)
     db.commit()
+
+    # Self-healing: if no trained model bundle exists yet (or it's stale), start
+    # training one in the background now. The report still generates with what it
+    # can compute; scores populate once training finishes. The user never has to
+    # manually "run discovery".
+    try:
+        from app.services.bundle_maintenance import ensure_bundle_fresh
+        ensure_bundle_fresh(db)
+    except Exception:
+        pass
+
     run_portfolio_report_job.delay(report.id)
     return {"report_id": report.id, "status": report.status}
+
+
+@router.get("/models/status")
+def models_status(db: Session = Depends(get_db)):
+    """Whether a trained model bundle is available (and fresh), or being prepared.
+    Lets the UI show 'scores ready' vs 'models preparing (~20 min)'."""
+    from app.services.bundle_maintenance import bundle_status
+    s = bundle_status(db)
+    if s["fresh"]:
+        state = "ready"
+    elif s["refresh_in_progress"]:
+        state = "preparing"
+    elif s["exists"]:
+        state = "stale"
+    else:
+        state = "absent"
+    return {**s, "state": state}
 
 
 @router.get("/{report_id}")
