@@ -105,11 +105,12 @@ def test_fallback_advisor_view_is_opinionated_and_grounded():
         ],
     }
     av = fallback_advisor_view(data)
-    assert set(av) == {"stance", "conviction", "key_points", "recommended_posture"}
+    assert set(av) == {"stance", "conviction", "key_points", "recommended_posture", "bull_case", "bear_case"}
     assert av["conviction"] == "cautious"  # concentrated + watch list
     assert "PAYX" in av["stance"] and "0.67" in av["stance"] and "0.83" in av["stance"]
     assert isinstance(av["key_points"], list) and av["key_points"]
-    assert av["recommended_posture"]
+    assert av["bull_case"] and av["bear_case"]  # research-desk debate present
+    assert av["recommendedPosture"] if False else av["recommended_posture"]
 
 
 def test_fallback_advisor_view_balanced_book():
@@ -190,6 +191,8 @@ def test_build_report_pdf_smoke():
         "narrative": {"exec_summary": "E.", "risk_commentary": "R.", "closing": "C."},
         "advisor_view": {"stance": "I would reduce concentration first.", "conviction": "moderate",
                          "key_points": ["Top names dominate risk.", "Two watch-list names."],
+                         "bull_case": ["Sharpe improves to 0.80.", "NVDA carries the book."],
+                         "bear_case": ["Concentration is high.", "Two deteriorating names."],
                          "recommended_posture": "Trim the top, exit the weakest, hold the rest."},
         "review": {"key_developments": "NVDA led; ZM lagged.",
                    "future_positioning": "Model-derived defensive tilt."},
@@ -229,3 +232,4 @@ def test_build_report_pdf_smoke():
     assert "Advisor" in alltext and "Executive summary" in alltext
     assert "Review" in alltext and "Future positioning" in alltext
     assert "Market backdrop" in alltext and "FED FUNDS" in alltext and "4.33" in alltext  # macro view present
+    assert "BULL CASE" in alltext and "BEAR CASE" in alltext  # research-desk debate present

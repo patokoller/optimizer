@@ -100,6 +100,8 @@ export interface ReportStatus {
       stance?: string;
       conviction?: string;
       keyPoints?: string[];
+      bullCase?: string[];
+      bearCase?: string[];
       recommendedPosture?: string;
     };
     overallPostureScore?: number | null;

@@ -359,6 +359,33 @@ def _advisor_panel(ss, advisor, content_w):
         for pt in pts:
             body.append(Paragraph(f"•&nbsp;&nbsp;{pt}", ss["AdvisorBullet"]))
             body.append(Spacer(1, 2))
+
+    # Bull case / Bear case — the research-desk debate, two columns.
+    bull = advisor.get("bull_case") or []
+    bear = advisor.get("bear_case") or []
+    if bull or bear:
+        body.append(Spacer(1, 8))
+        bull_cell = [Paragraph("BULL CASE", ParagraphStyle("bull", parent=ss["Label"], textColor=GREEN))]
+        for b in bull[:4]:
+            bull_cell.append(Paragraph(f"+&nbsp;&nbsp;{b}", ss["Cell"]))
+            bull_cell.append(Spacer(1, 2))
+        bear_cell = [Paragraph("BEAR CASE", ParagraphStyle("bear", parent=ss["Label"], textColor=RED))]
+        for b in bear[:4]:
+            bear_cell.append(Paragraph(f"–&nbsp;&nbsp;{b}", ss["Cell"]))
+            bear_cell.append(Spacer(1, 2))
+        debate = Table([[bull_cell, bear_cell]],
+                       colWidths=[(content_w - 28) / 2, (content_w - 28) / 2])
+        debate.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, -1), WHITE),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LINEBEFORE", (0, 0), (0, 0), 2.5, GREEN),
+            ("LINEBEFORE", (1, 0), (1, 0), 2.5, RED),
+            ("LINEAFTER", (0, 0), (0, 0), 0.5, HAIR),
+        ]))
+        body.append(debate)
+
     posture = advisor.get("recommended_posture")
     if posture:
         body.append(Spacer(1, 5))

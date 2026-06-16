@@ -245,6 +245,30 @@ export default function ReportPage() {
                         </ul>
                       </div>
                     )}
+                    {(!!summary.advisorView.bullCase?.length || !!summary.advisorView.bearCase?.length) && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {!!summary.advisorView.bullCase?.length && (
+                          <div className="rounded-md border-l-2 border-[var(--color-success)] bg-[var(--color-surface)] px-3 py-2">
+                            <p className="label-sm mb-1 font-semibold text-[var(--color-success)]">Bull case</p>
+                            <ul className="space-y-1">
+                              {summary.advisorView.bullCase.map((b, i) => (
+                                <li key={i} className="text-sm text-[var(--color-text-muted)]">+ {b}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {!!summary.advisorView.bearCase?.length && (
+                          <div className="rounded-md border-l-2 border-[var(--color-error)] bg-[var(--color-surface)] px-3 py-2">
+                            <p className="label-sm mb-1 font-semibold text-[var(--color-error)]">Bear case</p>
+                            <ul className="space-y-1">
+                              {summary.advisorView.bearCase.map((b, i) => (
+                                <li key={i} className="text-sm text-[var(--color-text-muted)]">– {b}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {summary.advisorView.recommendedPosture && (
                       <div className="border-l-2 border-[var(--color-primary)] bg-[var(--color-surface)] px-3 py-2">
                         <p className="text-sm text-[var(--color-text)]">

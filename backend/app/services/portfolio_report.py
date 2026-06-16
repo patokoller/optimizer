@@ -215,7 +215,44 @@ def fallback_advisor_view(data: dict) -> dict:
                "names, and hold the remainder pending fresh data."
                if concentrated or watch else
                "Maintain current positioning and revisit at the next scoring cycle.")
+
+    # Bull vs bear — the strongest case each way, grounded in the data.
+    movers = data.get("movers") or []
+    best = movers[0] if movers else None
+    worst = movers[-1] if movers and len(movers) > 1 else None
+    scored = [h for h in holdings if h.get("overall_score") is not None]
+    top_scored = max(scored, key=lambda h: h["overall_score"], default=None)
+
+    bull = []
+    if sh_p is not None and sh_c is not None and sh_p > sh_c:
+        bull.append(f"The proposed reallocation lifts the Sharpe ratio to {sh_p:.2f} from {sh_c:.2f}.")
+    if best and best.get("contribution", 0) > 0:
+        bull.append(f"{best['ticker']} is carrying the book ({best['period_return']*100:+.1f}% last month).")
+    if top_scored and top_scored["overall_score"] >= 0.6:
+        bull.append(f"{top_scored['ticker']} anchors quality at the top of the score range "
+                    f"({top_scored['overall_score']:.2f}).")
+    for h in holdings:
+        if (h.get("drift_trend") == "IMPROVING"):
+            bull.append(f"{h['ticker']}'s management tone is improving across recent calls.")
+            break
+    if not bull:
+        bull.append("Risk metrics are within normal ranges; no acute red flags in the current book.")
+
+    bear = []
+    if concentrated and top3:
+        bear.append(f"Concentration is high — the top {len(top3)} names are ~{top3_w*100:.0f}% of capital.")
+    if watch:
+        bear.append(f"{', '.join(watch)} pair weak scores with deteriorating management tone.")
+    if worst and worst.get("contribution", 0) < 0:
+        bear.append(f"{worst['ticker']} detracted ({worst['period_return']*100:+.1f}%) and weighs on the book.")
+    cur_vol = cur.get("annualized_vol")
+    if cur_vol is not None and cur_vol > 0.25:
+        bear.append(f"Volatility is elevated at {cur_vol*100:.0f}% annualized.")
+    if not bear:
+        bear.append("Scores are an unvalidated research signal; treat any single read with caution.")
+
     return {"stance": stance, "conviction": conviction,
+            "bull_case": bull[:4], "bear_case": bear[:4],
             "key_points": key_points, "recommended_posture": posture}
 
 
@@ -233,6 +270,8 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
             "overall_posture_score": data.get("overall_posture_score"),
             "risk_current": data.get("risk_current"),
             "risk_proposed": data.get("risk_proposed"),
+            "movers": [{"ticker": m["ticker"], "period_return": round(m["period_return"], 4)}
+                       for m in (data.get("movers") or [])],
             "watch_items": data.get("watch_items"),
             "actions": [{k: a[k] for k in ("ticker", "action", "delta")} for a in data.get("actions", [])],
             "holdings": [{"ticker": h["ticker"], "weight": h.get("weight"),
@@ -246,19 +285,25 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
             "you would do, in a confident but advisory voice (you propose; the client decides). "
             "Ground every claim in the data; invent no figures. Scores are an unvalidated research "
             "signal, so lean on concentration, risk, drift and the proposed changes as much as on "
-            "scores. Return ONLY JSON with keys: stance (one opinionated paragraph, 4-6 sentences), "
-            "conviction (one of: high, moderate, low, cautious), key_points (list of 2-4 short "
-            "sentences), recommended_posture (one sentence stating what you would actually do).\n\n"
+            "scores. Also argue both sides like a research desk: a bull_case (what would have to go "
+            "right / the strongest reasons to stay constructive) and a bear_case (the strongest "
+            "reasons for caution) — each a list of 2-4 short, data-grounded sentences. Return ONLY "
+            "JSON with keys: stance (one opinionated paragraph, 4-6 sentences), conviction (one of: "
+            "high, moderate, low, cautious), bull_case (list), bear_case (list), key_points (list of "
+            "2-4 short sentences), recommended_posture (one sentence stating what you would actually "
+            "do).\n\n"
             f"{json.dumps(ctx, default=str)}"
         )
         resp = client.messages.create(
-            model=llm_scorer.model, max_tokens=900, temperature=0.4,
+            model=llm_scorer.model, max_tokens=1100, temperature=0.4,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(raw)
-        if all(k in parsed for k in ("stance", "conviction", "key_points", "recommended_posture")):
-            if isinstance(parsed["key_points"], list) and parsed["stance"]:
+        required = ("stance", "conviction", "key_points", "recommended_posture", "bull_case", "bear_case")
+        if all(k in parsed for k in required):
+            if isinstance(parsed["key_points"], list) and parsed["stance"] \
+               and isinstance(parsed["bull_case"], list) and isinstance(parsed["bear_case"], list):
                 return parsed
         return fallback_advisor_view(data)
     except Exception as e:
