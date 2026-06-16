@@ -27,6 +27,7 @@ export function PortfolioReportPanel({ showHeader = true }: { showHeader?: boole
   const [report, setReport] = useState<ReportStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
@@ -158,9 +159,32 @@ export function PortfolioReportPanel({ showHeader = true }: { showHeader?: boole
                     </p>
                   </div>
                 </div>
-                <a href={api.reportDownloadUrl(report.reportId)} target="_blank" rel="noopener noreferrer">
-                  <Btn variant="primary" icon={<Download size={15} />}>Download PDF</Btn>
-                </a>
+                <Btn
+                  variant="primary"
+                  icon={downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+                  onClick={async () => {
+                    if (!report?.reportId) return;
+                    setDownloading(true);
+                    setError(null);
+                    try {
+                      const blob = await api.getReportPdf(report.reportId);
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `portfolio_report_${report.reportId.slice(0, 8)}.pdf`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Download failed");
+                    } finally {
+                      setDownloading(false);
+                    }
+                  }}
+                >
+                  {downloading ? "Preparing…" : "Download PDF"}
+                </Btn>
               </div>
 
               {/* Executive summary */}
