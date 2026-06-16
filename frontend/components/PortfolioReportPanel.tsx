@@ -66,6 +66,23 @@ export function PortfolioReportPanel({ showHeader = true }: { showHeader?: boole
     }
   }, [portfolio?.id, optimizer, poll]);
 
+  // Restore the latest report on mount / portfolio change so Download works
+  // after a page refresh without needing to regenerate the report.
+  useEffect(() => {
+    if (!portfolio?.id) return;
+    let cancelled = false;
+    api.getLatestReport(portfolio.id).then((r) => {
+      if (cancelled || !r) return;
+      setReport(r);
+      // If it's still in progress, resume polling so the UI updates to completion.
+      if (r.status === "pending" || r.status === "running") {
+        setRunning(true);
+        poll(r.reportId);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [portfolio?.id, poll]);
+
   const summary = report?.summary;
 
   return (
@@ -163,7 +180,10 @@ export function PortfolioReportPanel({ showHeader = true }: { showHeader?: boole
                   variant="primary"
                   icon={downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
                   onClick={async () => {
-                    if (!report?.reportId) return;
+                    if (!report?.reportId) {
+                      setError("No report available to download. Generate a report first.");
+                      return;
+                    }
                     setDownloading(true);
                     setError(null);
                     try {
