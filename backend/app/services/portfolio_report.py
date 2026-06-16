@@ -34,8 +34,20 @@ _TRIM_THRESHOLD = -0.02
 _EXIT_FLOOR = 0.005     # proposed weight at/below this (from a real position) = EXIT
 
 
-def compose_rationale(score: Optional[float], drift: Optional[str], action: str) -> str:
-    """One-sentence, evidence-anchored rationale tying the action to the score."""
+def compose_rationale(
+    score: Optional[float],
+    drift: Optional[str],
+    action: str,
+    excluded_reason: Optional[str] = None,
+) -> str:
+    """One-sentence, evidence-anchored rationale tying the action to the score.
+
+    If ``excluded_reason`` is set, the holding could not be scored/optimized for a
+    data reason (e.g. no price data for an unsupported symbol). In that case we say
+    so plainly rather than attributing the outcome to an optimizer decision.
+    """
+    if excluded_reason:
+        return excluded_reason
     sc = "no score" if score is None else (
         "top-tercile score" if score >= 0.66 else
         "mid-pack score" if score >= 0.4 else "bottom-tercile score"
@@ -60,10 +72,28 @@ def derive_actions(
     weights_proposed: dict[str, float],
     scores: dict[str, Optional[float]],
     drift: dict[str, Optional[str]],
+    excluded: Optional[dict[str, str]] = None,
 ) -> list[dict]:
-    """Pure: turn current/proposed weights + scores + drift into ranked actions."""
+    """Pure: turn current/proposed weights + scores + drift into ranked actions.
+
+    ``excluded`` maps ticker -> human-readable reason for tickers that could not be
+    priced/optimized (e.g. Alpaca-unsupported symbols). Such tickers are reported
+    as EXCLUDED with the true reason, never as an optimizer EXIT.
+    """
+    excluded = excluded or {}
     actions = []
     for t in weights_current:
+        if t in excluded:
+            cw = weights_current.get(t, 0.0) or 0.0
+            actions.append({
+                "ticker": t,
+                "action": "EXCLUDED",
+                "delta": 0.0,
+                "rationale": compose_rationale(
+                    scores.get(t), drift.get(t), "EXCLUDED", excluded_reason=excluded[t]
+                ),
+            })
+            continue
         cw = weights_current.get(t, 0.0) or 0.0
         pw = weights_proposed.get(t, 0.0) or 0.0
         delta = pw - cw
@@ -81,8 +111,8 @@ def derive_actions(
             "delta": delta,
             "rationale": compose_rationale(scores.get(t), drift.get(t), action),
         })
-    # Most impactful first: EXIT/large moves at the top.
-    order = {"EXIT": 0, "TRIM": 1, "ADD": 2, "HOLD": 3}
+    # Most impactful first: EXIT/large moves at the top; EXCLUDED sorted last.
+    order = {"EXIT": 0, "TRIM": 1, "ADD": 2, "HOLD": 3, "EXCLUDED": 4}
     actions.sort(key=lambda a: (order[a["action"]], -abs(a["delta"])))
     return actions
 
@@ -501,6 +531,32 @@ def build_report_data(
         prices_df = None
     returns_df = _returns_from_bars(prices_df)
 
+    # Identify holdings that could not be priced, so they are reported honestly
+    # (as data exclusions) rather than mislabeled as optimizer EXIT decisions.
+    # Two causes: symbols Alpaca's feed cannot handle (e.g. BRK.B), and any other
+    # ticker that simply came back with no bars.
+    unsupported = getattr(type(alpaca), "_ALPACA_UNSUPPORTED", set())
+    priced_tickers = (
+        set(prices_df["ticker"].unique()) if prices_df is not None and not prices_df.empty else set()
+    )
+    excluded: dict[str, str] = {}
+    for t in tickers:
+        if t in unsupported:
+            excluded[t] = (
+                "No price data: symbol unsupported by the price feed (e.g. share-class "
+                "tickers like BRK.B). Excluded from scoring and optimization."
+            )
+        elif t not in priced_tickers:
+            excluded[t] = (
+                "No price data returned for this symbol over the lookback window. "
+                "Excluded from scoring and optimization."
+            )
+    if excluded:
+        logger.info(
+            f"report: {len(excluded)} holding(s) excluded for missing price data: "
+            f"{sorted(excluded)}"
+        )
+
     # Current weights from latest market value (fallback: cost basis).
     last_price = {}
     if returns_df is not None and not returns_df.empty and prices_df is not None:
@@ -560,7 +616,7 @@ def build_report_data(
         weights_proposed = {t: 1.0 / len(tickers) for t in tickers}
     risk_proposed = risk_summary(returns_df, weights_proposed, sectors)
 
-    actions = derive_actions(weights_current, weights_proposed, scores_overall, drift)
+    actions = derive_actions(weights_current, weights_proposed, scores_overall, drift, excluded=excluded)
     watch_items = [t for t in tickers if drift.get(t) == "DETERIORATING"]
 
     regime = _latest_regime(db)
