@@ -711,59 +711,84 @@ def run_optimization_job(
         tickers = [s.ticker for s in scores]
         combined_scores = {s.ticker: s.combined_score or 0.5 for s in scores}
 
-        if optimizer_type == "deep_rl":
-            # For RL we need historical returns — use mock if Alpaca unavailable
-            import numpy as np
-            import pandas as pd
-            n = len(tickers)
-            # In production: fetch real returns from Alpaca
-            # Mock: use scores as proxy for expected returns
-            mock_returns = pd.DataFrame(
-                np.random.randn(500, n) * 0.01,
-                columns=tickers,
+        # ── Real historical returns (no mock data) ─────────────────
+        # Optimizers must run on actual prices, never random noise. Fetch a
+        # 24-month daily OHLCV window from Alpaca and pivot to a returns matrix.
+        # Tickers the feed cannot price (e.g. BRK.B) or that return no bars are
+        # dropped from the optimizable set and reported in the job warnings.
+        import numpy as np
+        import pandas as pd
+        from datetime import datetime as _dt, timedelta as _td
+        from app.data.clients import AlpacaClient, AlpacaDataError
+
+        opt_end = _dt.utcnow()
+        opt_start = opt_end - _td(days=730)
+        try:
+            alpaca = AlpacaClient()
+            prices_df = alpaca.get_ohlcv(tickers, opt_start, opt_end)
+        except AlpacaDataError as e:
+            # No real returns → do not fabricate. Fail the job with a clear reason
+            # so the UI shows an error state instead of a noise-based rebalance.
+            raise ValueError(
+                f"Cannot optimize without price data (Alpaca unavailable): {e}"
+            ) from e
+
+        if prices_df is None or prices_df.empty:
+            raise ValueError("Cannot optimize: no price data returned for any holding")
+
+        prices_df = prices_df.copy()
+        prices_df["date"] = pd.to_datetime(prices_df["date"])
+        returns_df = (
+            prices_df.pivot_table(index="date", columns="ticker", values="close")
+            .sort_index()
+            .pct_change(fill_method=None)
+            .dropna(how="all")
+        )
+
+        priced = [t for t in tickers if t in returns_df.columns]
+        dropped = [t for t in tickers if t not in returns_df.columns]
+        if dropped:
+            logger.warning(f"Optimization {job_id}: no price data for {dropped} — excluded")
+        if len(priced) < 2:
+            raise ValueError(
+                f"Cannot optimize: only {len(priced)} priced holding(s); need at least 2"
             )
-            mock_scores = pd.DataFrame(
-                np.tile([combined_scores[t] for t in tickers], (500, 1)),
-                columns=tickers,
+        returns_df = returns_df[priced]
+        n = len(priced)
+
+        if optimizer_type == "deep_rl":
+            # Composite scores aligned to the priced, optimizable universe.
+            scores_df = pd.DataFrame(
+                np.tile([combined_scores.get(t, 0.5) for t in priced], (len(returns_df), 1)),
+                columns=priced,
+                index=returns_df.index,
             )
             optimizer = DeepRLOptimizer(n_assets=n)
-            optimizer.train(mock_returns, mock_scores, total_timesteps=20_000)
+            optimizer.train(returns_df.fillna(0.0), scores_df, total_timesteps=20_000)
 
-            # Build obs from current scores
-            import numpy as np
-            obs = np.array([
-                [combined_scores[t] for t in tickers] +   # scores
-                [0.0] * n +                                 # lagged ret 1m
-                [0.0] * n +                                 # lagged ret 3m
-                [0.05] * n +                                # vol
-                [1.0 / n] * n                               # current weights
-            ], dtype=np.float32).flatten()
+            # Observation from latest real signals: scores, 1m/3m lagged returns,
+            # 21d volatility, and equal-weight starting allocation.
+            ret_1m = returns_df.tail(21).mean().reindex(priced).fillna(0.0).values
+            ret_3m = returns_df.tail(63).mean().reindex(priced).fillna(0.0).values
+            vol_21 = returns_df.tail(21).std().reindex(priced).fillna(0.0).values
+            obs = np.array(
+                [combined_scores.get(t, 0.5) for t in priced]
+                + list(ret_1m) + list(ret_3m) + list(vol_21)
+                + [1.0 / n] * n,
+                dtype=np.float32,
+            )
             raw_weights = optimizer.predict_weights(obs)
-            result_weights = {tickers[i]: float(w) for i, w in enumerate(raw_weights) if isinstance(raw_weights, np.ndarray)}
-            if not isinstance(raw_weights, np.ndarray):
-                result_weights = {t: float(raw_weights.get(i, 1.0/n)) for i, t in enumerate(tickers)}
+            if isinstance(raw_weights, np.ndarray):
+                result_weights = {priced[i]: float(w) for i, w in enumerate(raw_weights)}
+            else:
+                result_weights = {t: float(raw_weights.get(i, 1.0 / n)) for i, t in enumerate(priced)}
 
         elif optimizer_type == "mvo":
-            import numpy as np
-            import pandas as pd
-            # Mock returns if real data unavailable
-            n = len(tickers)
-            mock_returns = pd.DataFrame(
-                np.random.randn(252, n) * 0.01,
-                columns=tickers,
-            )
             max_weight = settings.get("max_weight", 0.25)
-            result_weights = mvo_optimize(mock_returns, target="max_sharpe", max_weight=max_weight)
+            result_weights = mvo_optimize(returns_df, target="max_sharpe", max_weight=max_weight)
 
         elif optimizer_type == "hrp":
-            import numpy as np
-            import pandas as pd
-            n = len(tickers)
-            mock_returns = pd.DataFrame(
-                np.random.randn(252, n) * 0.01,
-                columns=tickers,
-            )
-            result_weights = hrp_optimize(mock_returns)
+            result_weights = hrp_optimize(returns_df)
 
         else:
             raise ValueError(f"Unknown optimizer type: {optimizer_type}")
@@ -776,7 +801,10 @@ def run_optimization_job(
         job.result_json = result_weights
         job.status = models.RunStatus.complete
         db.commit()
-        logger.info(f"Optimization job {job_id} ({optimizer_type}) complete")
+        logger.info(
+            f"Optimization job {job_id} ({optimizer_type}) complete on real returns — "
+            f"{n} priced holdings, {len(dropped)} excluded"
+        )
 
     except Exception as e:
         logger.error(f"Optimization job {job_id} failed: {e}", exc_info=True)
