@@ -76,6 +76,35 @@ def test_rationale_anchors_to_evidence():
     assert "top-tercile" in r2.lower()
 
 
+def test_excluded_ticker_labeled_honestly_not_as_optimizer_exit():
+    """A holding with no price data must read as a data exclusion, never as an
+    optimizer EXIT — the BRK.B mislabel regression test."""
+    wc = {"BRK.B": 0.05, "MSFT": 0.10, "KO": 0.05}
+    wp = {"MSFT": 0.0, "KO": 0.30}            # BRK.B absent (no price); MSFT real exit
+    sc = {"BRK.B": None, "MSFT": 0.55, "KO": 0.70}
+    dr = {}
+    reason = ("No price data: symbol unsupported by the price feed (e.g. share-class "
+              "tickers like BRK.B). Excluded from scoring and optimization.")
+    acts = derive_actions(wc, wp, sc, dr, excluded={"BRK.B": reason})
+    by = {a["ticker"]: a for a in acts}
+    # BRK.B is EXCLUDED with the true reason, not an optimizer drop
+    assert by["BRK.B"]["action"] == "EXCLUDED"
+    assert "price data" in by["BRK.B"]["rationale"].lower()
+    assert "optimizer drops" not in by["BRK.B"]["rationale"].lower()
+    # A genuine optimizer exit is still labeled as such
+    assert by["MSFT"]["action"] == "EXIT"
+    assert "optimizer drops" in by["MSFT"]["rationale"].lower()
+    # Every input holding is represented — nothing silently dropped
+    assert set(by) == set(wc)
+    # EXCLUDED rows sort last
+    assert acts[-1]["action"] == "EXCLUDED"
+
+
+def test_compose_rationale_excluded_reason_takes_precedence():
+    reason = "No price data returned for this symbol over the lookback window."
+    assert compose_rationale(None, None, "EXCLUDED", excluded_reason=reason) == reason
+
+
 def test_fallback_narrative_uses_numbers():
     data = {
         "holdings": [{"ticker": "X"}] * 4,
