@@ -31,6 +31,57 @@ logger = logging.getLogger(__name__)
 # refresh. Training is expensive, so this is deliberately generous.
 BUNDLE_MAX_AGE_DAYS = 7
 
+# A discovery/training run that has sat in pending/running longer than this is
+# treated as dead (worker restarted or OOM-killed mid-job — which leaves no
+# error log and never updates the row). Past this it stops counting as "in
+# progress" so a new run can be kicked. The job itself takes ~22 min.
+STALE_RUN_MINUTES = 45
+
+
+def _refresh_in_progress(db):
+    """A discovery run that is pending or running counts as a bundle refresh
+    already underway — UNLESS it has exceeded STALE_RUN_MINUTES, in which case it
+    is almost certainly a dead run (worker killed mid-job) and is ignored so a
+    fresh run can take over."""
+    from app import models
+    cutoff = datetime.utcnow() - timedelta(minutes=STALE_RUN_MINUTES)
+    return (
+        db.query(models.DiscoveryRun)
+        .filter(
+            models.DiscoveryRun.status.in_([
+                models.RunStatus.pending, models.RunStatus.running,
+            ]),
+            models.DiscoveryRun.created_at >= cutoff,
+        )
+        .order_by(models.DiscoveryRun.created_at.desc())
+        .first()
+    )
+
+
+def _expire_stale_runs(db) -> int:
+    """Mark pending/running discovery runs older than STALE_RUN_MINUTES as failed
+    so they stop appearing as 'training in progress' in the UI. Returns count."""
+    from app import models
+    cutoff = datetime.utcnow() - timedelta(minutes=STALE_RUN_MINUTES)
+    stale = (
+        db.query(models.DiscoveryRun)
+        .filter(
+            models.DiscoveryRun.status.in_([
+                models.RunStatus.pending, models.RunStatus.running,
+            ]),
+            models.DiscoveryRun.created_at < cutoff,
+        )
+        .all()
+    )
+    for r in stale:
+        r.status = models.RunStatus.failed
+        r.error_log = ((r.error_log or "")
+                       + " [auto-expired: exceeded max runtime; worker likely restarted mid-job]")
+    if stale:
+        db.commit()
+        logger.warning(f"Expired {len(stale)} stale discovery run(s) stuck in pending/running")
+    return len(stale)
+
 
 def bundle_status(db, max_age_days: int = BUNDLE_MAX_AGE_DAYS) -> dict:
     """Lightweight freshness read — does NOT deserialize the models."""
@@ -57,20 +108,6 @@ def bundle_status(db, max_age_days: int = BUNDLE_MAX_AGE_DAYS) -> dict:
     }
 
 
-def _refresh_in_progress(db):
-    """A discovery run that is pending or running counts as a bundle refresh
-    already underway (discovery trains and persists the bundle)."""
-    from app import models
-    return (
-        db.query(models.DiscoveryRun)
-        .filter(models.DiscoveryRun.status.in_([
-            models.RunStatus.pending, models.RunStatus.running,
-        ]))
-        .order_by(models.DiscoveryRun.created_at.desc())
-        .first()
-    )
-
-
 def _start_training(db) -> str:
     """Create a discovery run and enqueue the training job. Returns the run id."""
     from app import models
@@ -92,6 +129,7 @@ def ensure_bundle_fresh(db, max_age_days: int = BUNDLE_MAX_AGE_DAYS) -> dict:
     enqueued). Never blocks; never enqueues a second run if one is already
     pending/running.
     """
+    _expire_stale_runs(db)  # clear dead runs so they don't block a re-kick
     status = bundle_status(db, max_age_days)
     status["refresh_started"] = False
 

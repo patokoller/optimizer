@@ -36,6 +36,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     # Visibility timeout must exceed the longest job (discovery ~90min → set 3h)
     broker_transport_options={"visibility_timeout": 10800},
+    broker_connection_retry_on_startup=True,  # silence Celery 6 deprecation warning
 )
 
 # Proactive bundle refresh: keep a freshly-trained model bundle available so the
@@ -884,26 +885,26 @@ def run_discovery_job(self, discovery_run_id: str):
         # ── EDGAR filings ──────────────────────────────────────────
         edgar = EDGARClient()
         filing_contexts = {}
-        for ticker in clean_tickers:
+        logger.info(f"Discovery: fetching SEC filings for {len(clean_tickers)} tickers "
+                    f"(rate-limited; this phase can take several minutes)...")
+        for i, ticker in enumerate(clean_tickers, 1):
             ctx = edgar.get_filing_context(ticker, rebalance_date)
             if ctx:
                 filing_contexts[ticker] = ctx
+            if i % 25 == 0 or i == len(clean_tickers):
+                logger.info(f"Discovery: SEC filings {i}/{len(clean_tickers)}")
 
         # ── Enrichment — with monthly cache ────────────────────────────────
         from app.data.enrichment_cache import get_or_fetch, cache_stats
         enriched_contexts = {}
         cache_hits = 0
+        logger.info(f"Discovery: enriching {len(clean_tickers)} tickers (AV + EDGAR per ticker)...")
         try:
-            for ticker in clean_tickers:
+            for i, ticker in enumerate(clean_tickers, 1):
                 ctx_data = get_or_fetch(db, ticker, av, edgar_client=edgar)
                 enriched_contexts[ticker] = ctx_data
-                if any(ctx_data.values()):
-                    logger.info(
-                        f"Discovery enrichment {ticker}: transcript={bool(ctx_data.get('transcript'))}, "
-                        f"drift={bool(ctx_data.get('language_drift'))}, "
-                        f"comments={bool(ctx_data.get('comment_letters'))}, "
-                        f"short={bool(ctx_data.get('short_interest'))}"
-                    )
+                if i % 25 == 0 or i == len(clean_tickers):
+                    logger.info(f"Discovery: enrichment {i}/{len(clean_tickers)}")
             stats = cache_stats(db)
             logger.info(f"Discovery cache: {cache_hits}/{len(clean_tickers)} hits this run | {stats}")
         except Exception as e:
@@ -961,12 +962,15 @@ def run_discovery_job(self, discovery_run_id: str):
         # ── ML scoring ─────────────────────────────────────────────
         fund_scores, tech_scores, entr_scores = {}, {}, {}
         fund_model = tech_model = entr_model = None
+        logger.info("Discovery: training ML models (fundamental, technical, entropy) — "
+                    "the slow CPU-bound phase; expect a quiet stretch here...")
 
         if fundamentals_df is not None:
             try:
                 fund_model = FundamentalScorer()
                 fund_model.fit(fundamentals_df, rebalance_date)
                 fund_scores = fund_model.predict(clean_tickers, fundamentals_df)
+                logger.info("Discovery: fundamental model trained")
             except Exception as e:
                 logger.error(f"Discovery fundamental model error: {e}")
 
@@ -978,6 +982,7 @@ def run_discovery_job(self, discovery_run_id: str):
                 entr_model = EntropyScorer()
                 entr_model.fit(prices_df, rebalance_date)
                 entr_scores = entr_model.predict(clean_tickers, prices_df, rebalance_date)
+                logger.info("Discovery: technical + entropy models trained")
             except Exception as e:
                 logger.error(f"Discovery tech/entropy model error: {e}")
 
