@@ -73,7 +73,7 @@ export interface ReportAction {
 export interface ReportStatus {
   reportId: string;
   portfolioId: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "complete" | "complete_with_warnings" | "failed";
   optimizer: string;
   summary?: {
     portfolioName: string;

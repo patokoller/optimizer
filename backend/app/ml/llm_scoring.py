@@ -360,14 +360,18 @@ class LLMScorer:
             # API failed — fall back to w=1.0
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, model: str | None = None):
+        # Model is env-overridable so it can be changed without a redeploy when
+        # Anthropic rotates/retires model strings. The previous hard default
+        # (claude-sonnet-4-20250514) began returning 404 once it was retired.
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             logger.warning("ANTHROPIC_API_KEY not set — LLM scoring unavailable.")
             self.client = None
         else:
             self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = model
+        logger.info(f"LLMScorer using model: {self.model}")
 
     def score(
         self,

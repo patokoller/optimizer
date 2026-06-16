@@ -1419,7 +1419,7 @@ def run_portfolio_report_job(self, report_id: str):
         report.summary_json = summary
         report.pdf_bytes = pdf
         report.pdf_size = len(pdf)
-        report.status = models.RunStatus.completed
+        report.status = models.RunStatus.complete
         report.completed_at = datetime.utcnow()
         db.commit()
         logger.info(f"Report {report_id} complete — pdf={len(pdf)/1024:.0f}KB, "

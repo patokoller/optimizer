@@ -142,17 +142,21 @@ def score_one(
     edgar=None,
     llm_scorer=None,
     enrichment=None,
+    bundle=None,
 ) -> dict:
     """
     Live single-ticker scoring. Dependencies are injectable for testing; in
-    production they default to the real clients.
+    production they default to the real clients. A preloaded `bundle` may be
+    passed to avoid reloading it on every call (e.g. when scoring a whole
+    portfolio); when omitted it is loaded once here.
 
     Returns the assembled payload, or {"error": ...} when no bundle exists or the
     ticker yields no usable data.
     """
     ticker = ticker.strip().upper()
 
-    bundle = load_latest_bundle(db)
+    if bundle is None:
+        bundle = load_latest_bundle(db)
     if bundle is None:
         return {
             "error": "no_model_bundle",

@@ -37,7 +37,8 @@ export default function ReportPage() {
       try {
         const r = await api.getReport(reportId);
         setReport(r);
-        if (r.status === "completed" || r.status === "failed") {
+        const done = r.status === "complete" || r.status === "complete_with_warnings";
+        if (done || r.status === "failed") {
           if (pollRef.current) clearInterval(pollRef.current);
           setRunning(false);
           if (r.status === "failed") setError(r.error || "Report generation failed");
@@ -140,7 +141,7 @@ export default function ReportPage() {
           )}
 
           {/* Completed: preview + download */}
-          {report?.status === "completed" && summary && (
+          {(report?.status === "complete" || report?.status === "complete_with_warnings") && summary && (
             <div className="mt-6 space-y-5">
               <div className="flex items-center justify-between rounded-lg border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-4">
                 <div className="flex items-center gap-2">

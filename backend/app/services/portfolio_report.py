@@ -403,7 +403,7 @@ def _returns_from_bars(prices_df: pd.DataFrame) -> pd.DataFrame:
     df = prices_df.copy()
     df["date"] = pd.to_datetime(df["date"])
     wide = df.pivot_table(index="date", columns="ticker", values="close").sort_index()
-    return wide.pct_change().dropna(how="all")
+    return wide.pct_change(fill_method=None).dropna(how="all")
 
 
 def build_report_data(
@@ -460,13 +460,16 @@ def build_report_data(
     total_mv = sum(mv.values()) or 1.0
     weights_current = {t: mv[t] / total_mv for t in tickers}
 
-    # Per-holding scores (cached LLM) + drift.
+    # Per-holding scores (cached LLM) + drift. Load the model bundle once and
+    # reuse it across holdings (avoids a DB round-trip per ticker).
+    from app.ml.model_bundle import load_latest_bundle
+    bundle = load_latest_bundle(db)
     scores_overall: dict[str, Optional[float]] = {}
     drift: dict[str, Optional[str]] = {}
     holding_rows = []
     sectors = {}
     for h in holdings:
-        payload = score_one(db, h.ticker, alpaca=alpaca, llm_scorer=llm_scorer)
+        payload = score_one(db, h.ticker, alpaca=alpaca, llm_scorer=llm_scorer, bundle=bundle)
         ov = payload.get("overall_score")
         scores_overall[h.ticker] = ov
         dtrend = _lookup_drift(db, h.ticker)
@@ -518,6 +521,7 @@ def build_report_data(
         "macro": macro,
         "overall_posture_score": overall_posture,
         "movers": movers,
+        "scores_available": bundle is not None,
         "holdings": holding_rows,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,
