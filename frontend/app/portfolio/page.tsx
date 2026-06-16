@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, CheckCircle, RefreshCw } from "lucide-react";
-import { SectionHeader, Btn, EmptyState, Spinner } from "@/components/ui";
+import { SectionHeader, Btn, EmptyState, Spinner, cn } from "@/components/ui";
 import { useStore } from "@/store";
 import { api } from "@/lib/api-client";
+import { PortfolioReportPanel } from "@/components/PortfolioReportPanel";
 import type { Portfolio } from "@/types";
 
 export default function PortfolioPage() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [tab, setTab] = useState<"setup" | "analysis">("setup");
   const [loading, setLoading]     = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -72,6 +74,27 @@ export default function PortfolioPage() {
         </p>
       </div>
 
+      {/* Tabs: setup/holdings vs the analysis report (co-located with the portfolio) */}
+      <div className="flex gap-1 border-b border-border">
+        {([["setup", "Setup & Holdings"], ["analysis", "Analysis Report"]] as const).map(
+          ([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                "px-4 py-2 text-sm font-medium transition-colors -mb-px border-b-2",
+                tab === key
+                  ? "border-primary text-text"
+                  : "border-transparent text-muted hover:text-text"
+              )}
+            >
+              {label}
+            </button>
+          )
+        )}
+      </div>
+
+      {tab === "setup" && (
       <div className="flex gap-5 flex-wrap">
         {/* Upload panel */}
         <div className="flex-1 min-w-[280px] space-y-4">
@@ -221,6 +244,16 @@ export default function PortfolioPage() {
           </div>
         </div>
       </div>
+      )}
+
+      {tab === "analysis" && (
+        portfolio?.id
+          ? <PortfolioReportPanel showHeader={false} />
+          : <EmptyState
+              title="No portfolio loaded"
+              description="Upload or select a portfolio in Setup & Holdings, then generate its analysis report here."
+            />
+      )}
     </div>
   );
 }
