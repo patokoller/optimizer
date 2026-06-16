@@ -122,12 +122,26 @@ def download_report(report_id: str, db: Session = Depends(get_db)):
 
 @router.get("/portfolio/{portfolio_id}/latest")
 def latest_for_portfolio(portfolio_id: str, db: Session = Depends(get_db)):
+    # Prefer the most recent *completed* report so a failed attempt doesn't
+    # mask a valid PDF that's already been generated.
     report = (
         db.query(models.PortfolioReport)
-        .filter(models.PortfolioReport.portfolio_id == portfolio_id)
+        .filter(
+            models.PortfolioReport.portfolio_id == portfolio_id,
+            models.PortfolioReport.status.in_(["complete", "complete_with_warnings"]),
+        )
         .order_by(models.PortfolioReport.created_at.desc())
         .first()
     )
+    # Fall back to whatever is most recent (including failed/pending) so callers
+    # can still surface in-progress or error state when no completed report exists.
+    if report is None:
+        report = (
+            db.query(models.PortfolioReport)
+            .filter(models.PortfolioReport.portfolio_id == portfolio_id)
+            .order_by(models.PortfolioReport.created_at.desc())
+            .first()
+        )
     if report is None:
         raise HTTPException(status_code=404, detail="No report yet for this portfolio")
     return {"report_id": report.id, "status": report.status,
