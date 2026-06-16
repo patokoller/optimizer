@@ -270,6 +270,25 @@ class APIClient {
     return data as Blob;
   }
 
+  /**
+   * Fetch the most recent completed report for a portfolio. Used on mount so
+   * the panel restores state after a page refresh without requiring the user
+   * to regenerate the report.
+   * Returns null if no report exists yet for this portfolio.
+   */
+  async getLatestReport(portfolioId: string): Promise<ReportStatus | null> {
+    try {
+      const { data } = await this.http.get(
+        `/api/report/portfolio/${portfolioId}/latest`
+      );
+      if (!data?.reportId) return null;
+      // Fetch full report details (latest endpoint only returns id + status)
+      return await this.getReport(data.reportId);
+    } catch {
+      return null;
+    }
+  }
+
   // ── Optimization ──────────────────────────────────────────────────
   async optimizeDeepRL(
     portfolioId: string,
