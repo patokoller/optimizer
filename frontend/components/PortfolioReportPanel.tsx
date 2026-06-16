@@ -66,18 +66,23 @@ export function PortfolioReportPanel({ showHeader = true }: { showHeader?: boole
     }
   }, [portfolio?.id, optimizer, poll]);
 
-  // Restore the latest report on mount / portfolio change so Download works
-  // after a page refresh without needing to regenerate the report.
+  // On mount / portfolio change: load the latest completed report so the
+  // Download button works after a page refresh without regenerating.
   useEffect(() => {
     if (!portfolio?.id) return;
     let cancelled = false;
     api.getLatestReport(portfolio.id).then((r) => {
       if (cancelled || !r) return;
       setReport(r);
-      // If it's still in progress, resume polling so the UI updates to completion.
       if (r.status === "pending" || r.status === "running") {
         setRunning(true);
         poll(r.reportId);
+      }
+      // Don't surface error banner for old failed reports when a completed
+      // report is already showing — the backend prefers completed ones now,
+      // but guard here too for belt-and-suspenders.
+      if (r.status === "failed") {
+        setError(null);
       }
     });
     return () => { cancelled = true; };
