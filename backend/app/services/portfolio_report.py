@@ -192,7 +192,10 @@ def generate_narrative(llm_scorer, data: dict) -> dict:
             "Write in a precise, neutral, advisory voice — propose, do not command; tie claims "
             "to the numbers. Do NOT invent figures not present. When stating how many positions "
             "the portfolio holds, use position_counts.total exactly; never count rows yourself. "
-            "Return ONLY JSON with keys "
+            + ("Language-drift data is unavailable this period — do NOT mention drift, "
+               "management-tone trends, or 'drift scores'. "
+               if not data.get("drift_data_available") else "")
+            + "Return ONLY JSON with keys "
             "exec_summary (3-4 sentences), risk_commentary (2-3 sentences), closing (1-2 sentences).\n\n"
             f"{json.dumps(ctx, default=str)}"
         )
@@ -339,7 +342,11 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
             "this portfolio — not a neutral summary. Take a clear position on what matters and what "
             "you would do, in a confident but advisory voice (you propose; the client decides). "
             "Ground every claim in the data; invent no figures. When stating how many positions the "
-            "portfolio holds, use position_counts.total exactly; never count rows yourself. Scores are an unvalidated research "
+            "portfolio holds, use position_counts.total exactly; never count rows yourself. "
+            + ("Language-drift data is unavailable this period — do NOT mention drift or "
+               "management-tone trends as inputs. "
+               if not data.get("drift_data_available") else "")
+            + "Scores are an unvalidated research "
             "signal, so lean on concentration, risk, drift and the proposed changes as much as on "
             "scores. Also argue both sides like a research desk: a bull_case (what would have to go "
             "right / the strongest reasons to stay constructive) and a bear_case (the strongest "
@@ -466,20 +473,29 @@ def generate_review_outlook(llm_scorer, data: dict) -> dict:
             "actions": [{k: a[k] for k in ("ticker", "action", "delta")} for a in data.get("actions", [])],
             "watch_items": data.get("watch_items"),
         }
+        _drift_ok = data.get("drift_data_available")
+        _tone_clause = ("plus notable changes in management tone (use 'drift'). "
+                        if _drift_ok else "")
+        _derived_clause = ("model-derived from scores/drift/risk" if _drift_ok
+                           else "model-derived from scores and risk")
         prompt = (
             "You are writing two concise sections of a portfolio report, in the style of a private "
             "bank factsheet. Be specific and name holdings, but keep each section to 4-6 sentences.\n\n"
             "1) key_developments: what actually moved over the trailing month (use the 'movers' data — "
-            "name the biggest contributor and detractor with their returns), plus notable changes in "
-            "management tone (use 'drift'). For the named movers, add a short forward-looking note on "
+            "name the biggest contributor and detractor with their returns), "
+            + _tone_clause +
+            "For the named movers, add a short forward-looking note on "
             "the company's outlook and supply-chain/demand context — but ONLY using each holding's "
             "provided key_positives / key_risks. Do NOT invent macro or company facts not in that data.\n"
             "2) future_positioning: synthesize the regime and the proposed actions into a forward stance. "
             "If 'macro' figures are present (fed funds, CPI, 10Y-2Y curve, VIX — all real, sourced data), "
             "reference the relevant ones factually to frame the backdrop; do not invent any macro number "
-            "not given. Explicitly frame the positioning as model-derived from scores/drift/risk, not a "
+            "not given. Explicitly frame the positioning as " + _derived_clause + ", not a "
             "market forecast.\n\n"
-            "Return ONLY JSON with keys key_developments and future_positioning (strings).\n\n"
+            + ("" if _drift_ok else
+               "Language-drift data is unavailable this period — do NOT mention drift or "
+               "management-tone trends anywhere.\n")
+            + "Return ONLY JSON with keys key_developments and future_positioning (strings).\n\n"
             f"{json.dumps(ctx, default=str)}"
         )
         resp = client.messages.create(
@@ -669,6 +685,14 @@ def build_report_data(
         for s in sectors.values()
     )
 
+    # Whether any holding has a computed language-drift trend. When the whole
+    # column is empty (the common case — drift needs multi-quarter enrichment
+    # history), the narrative must not claim it "derived from drift scores".
+    drift_data_available = any(
+        (d and str(d).strip().upper() in ("IMPROVING", "DETERIORATING", "STABLE"))
+        for d in drift.values()
+    )
+
     data = {
         "portfolio_name": portfolio.name,
         "as_of": end.strftime("%Y-%m-%d"),
@@ -684,6 +708,7 @@ def build_report_data(
         "n_priced": n_priced,
         "n_excluded": n_excluded,
         "sector_data_available": sector_data_available,
+        "drift_data_available": drift_data_available,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,
         "proposed_weights": weights_proposed,
