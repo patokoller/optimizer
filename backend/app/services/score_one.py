@@ -35,6 +35,73 @@ logger = logging.getLogger(__name__)
 _STRATEGIES = ("fundamental", "technical", "entropy")
 
 
+def _format_fundamentals_context(fundamentals_df, ticker: str, max_quarters: int = 4) -> str:
+    """Turn the fetched quarterly fundamentals into a compact text block for the
+    LLM prompt.
+
+    The fundamentals were already fetched from Alpha Vantage (revenue, operating
+    income, net income, margins) but were not being passed into the scoring
+    prompt — so the LLM reported a 'complete information void' even for names
+    whose financials we had. This converts them into the FINANCIAL STATEMENTS
+    section the prompt expects. Returns '' when no usable data is present.
+    """
+    if fundamentals_df is None or getattr(fundamentals_df, "empty", True):
+        return ""
+    try:
+        cols = {"period_date", "revenue", "operating_income", "net_income",
+                "operating_margin", "net_margin"}
+        if not cols.issubset(set(fundamentals_df.columns)):
+            return ""
+        df = fundamentals_df.sort_values("period_date").tail(max_quarters)
+        if df.empty:
+            return ""
+
+        def _money(v) -> str:
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return "n/a"
+            if abs(v) >= 1e9:
+                return f"${v / 1e9:.2f}B"
+            if abs(v) >= 1e6:
+                return f"${v / 1e6:.1f}M"
+            return f"${v:,.0f}"
+
+        def _pct(v) -> str:
+            try:
+                return f"{float(v) * 100:.1f}%"
+            except (TypeError, ValueError):
+                return "n/a"
+
+        lines = [f"Quarterly income-statement history for {ticker} "
+                 f"(most recent {len(df)} quarters, source: Alpha Vantage):"]
+        for _, r in df.iterrows():
+            period = r["period_date"]
+            period_s = period.strftime("%Y-%m") if hasattr(period, "strftime") else str(period)
+            lines.append(
+                f"  {period_s}: revenue {_money(r['revenue'])}, "
+                f"operating income {_money(r['operating_income'])}, "
+                f"net income {_money(r['net_income'])}, "
+                f"operating margin {_pct(r['operating_margin'])}, "
+                f"net margin {_pct(r['net_margin'])}"
+            )
+        # Trend note: compare oldest vs newest revenue when we have ≥2 quarters.
+        if len(df) >= 2:
+            first_rev = df.iloc[0]["revenue"]
+            last_rev = df.iloc[-1]["revenue"]
+            try:
+                if first_rev and float(first_rev) != 0:
+                    chg = (float(last_rev) - float(first_rev)) / abs(float(first_rev)) * 100
+                    direction = "growth" if chg >= 0 else "decline"
+                    lines.append(f"  Revenue {direction} over the window: {chg:+.1f}%.")
+            except (TypeError, ValueError):
+                pass
+        return "\n".join(lines)
+    except Exception as e:  # never let formatting break scoring
+        logger.warning(f"_format_fundamentals_context failed for {ticker}: {e}")
+        return ""
+
+
 def assemble_score_one(
     bundle: LoadedBundle,
     *,
@@ -220,6 +287,7 @@ def score_one(
             frequency=frequency,
             period=rebalance_date.strftime("%Y-%m") if rebalance_date else "",
             filing_context=filing_ctx,
+            income_statement_context=_format_fundamentals_context(fundamentals_df, ticker),
         )
         from app.ml.llm_cache import score_sync_cached
         period = rebalance_date.strftime("%Y-%m") if rebalance_date else ""
