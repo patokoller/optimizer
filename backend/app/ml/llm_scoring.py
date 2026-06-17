@@ -289,6 +289,9 @@ PERIOD: {period} ({frequency})
 --- EARNINGS SURPRISE HISTORY ---
 {earnings_history_context}
 
+--- INCOME STATEMENT (quarterly: revenue, operating/net income, margins) ---
+{income_statement_context}
+
 --- BALANCE SHEET (last 4 quarters) ---
 {balance_sheet_context}
 
@@ -385,6 +388,7 @@ class LLMScorer:
         news_context: str = "",
         earnings_history_context: str = "",
         overview_context: str = "",
+        income_statement_context: str = "",
         balance_sheet_context: str = "",
         cash_flow_context: str = "",
         insider_context: str = "",
@@ -429,6 +433,7 @@ class LLMScorer:
             earnings_context=_qa_weighted_truncate(earnings_context, 15_000),  # Q&A-weighted (#21)
             transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
+            income_statement_context=income_statement_context[:5_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],
             insider_context=insider_context[:4_000],
@@ -553,6 +558,7 @@ class LLMScorer:
         news_context: str = "",
         earnings_history_context: str = "",
         overview_context: str = "",
+        income_statement_context: str = "",
         balance_sheet_context: str = "",
         cash_flow_context: str = "",
         insider_context: str = "",
@@ -576,6 +582,7 @@ class LLMScorer:
             earnings_context=_qa_weighted_truncate(earnings_context, 15_000),
             transcript_qa_split_context=transcript_qa_split_context[:8_000],
             earnings_history_context=earnings_history_context[:3_000],
+            income_statement_context=income_statement_context[:5_000],
             balance_sheet_context=balance_sheet_context[:5_000],
             cash_flow_context=cash_flow_context[:5_000],
             insider_context=insider_context[:4_000],
@@ -794,7 +801,3 @@ class LLMScorer:
                 scores[ticker] = parsed
         logger.info(f"Batch complete: {len(scores)}/{len(prompts)} tickers scored successfully")
         return scores
-
-
-
-
