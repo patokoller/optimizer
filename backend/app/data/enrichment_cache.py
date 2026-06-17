@@ -154,6 +154,107 @@ def set_drift_cached(db: Session, ticker: str, drift_text: str, quarter: Optiona
 
 
 DRIFT_EMPTY_SENTINEL = "__NO_DRIFT_DATA__"
+FUNDAMENTALS_EMPTY_SENTINEL = "__NO_FUNDAMENTALS_DATA__"
+
+
+def get_fundamentals_cached(db: Session, ticker: str, quarter: Optional[str] = None) -> Optional[str]:
+    """Return the cached formatted income-statement context for the quarter, or None on miss."""
+    quarter = quarter or _cache_quarter()
+    try:
+        row = db.execute(
+            text("SELECT context FROM enrichment_cache WHERE ticker = :t AND cache_month = :q"),
+            {"t": ticker, "q": f"FUND:{quarter}"},
+        ).fetchone()
+        if row:
+            ctx = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            return ctx.get("fundamentals_context", "") or None
+    except Exception as e:
+        logger.warning(f"Fundamentals cache read failed for {ticker}: {e}")
+    return None
+
+
+def set_fundamentals_cached(db: Session, ticker: str, ctx_text: str,
+                            quarter: Optional[str] = None) -> None:
+    """Persist the formatted income-statement context under a quarterly cache key.
+
+    Keyed as 'FUND:{quarter}' so it shares the enrichment_cache table without
+    colliding with the monthly enrichment context or the bare-quarter drift key.
+    """
+    quarter = quarter or _cache_quarter()
+    try:
+        db.execute(
+            text("""
+                INSERT INTO enrichment_cache (ticker, cache_month, context, fetched_at)
+                VALUES (:t, :q, CAST(:ctx AS jsonb), now())
+                ON CONFLICT (ticker, cache_month)
+                DO UPDATE SET context = EXCLUDED.context, fetched_at = now()
+            """),
+            {"t": ticker, "q": f"FUND:{quarter}", "ctx": json.dumps({"fundamentals_context": ctx_text})},
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Fundamentals cache write failed for {ticker}: {e}")
+        db.rollback()
+
+
+def get_or_fetch_fundamentals_context(db: Session, ticker: str, av_client, formatter) -> str:
+    """Return the formatted income-statement context for ticker, using a quarterly cache.
+
+    This exists because reports score ~34 tickers sequentially, each previously
+    calling Alpha Vantage live. AV's free tier caps daily requests, so on a busy
+    day later tickers get throttled → empty fundamentals → the LLM writes
+    'complete information void' even for names whose financials exist. Caching the
+    formatted context per ticker per quarter means AV is hit at most once per name
+    per quarter; every later report reads from the DB at no API cost.
+
+    Empty results (ETFs, dotted/foreign tickers, AV throttle on first fetch) are
+    cached as a tombstone so they don't re-hit AV on every run for the rest of the
+    quarter — matching the drift-cache behavior.
+    """
+    quarter = _cache_quarter()
+
+    cached = get_fundamentals_cached(db, ticker, quarter)
+    if cached:
+        if cached == FUNDAMENTALS_EMPTY_SENTINEL:
+            logger.debug(f"Fundamentals cache HIT {ticker} ({quarter}) — empty tombstone")
+            return ""
+        logger.debug(f"Fundamentals cache HIT {ticker} ({quarter}) — {len(cached)} chars")
+        return cached
+
+    logger.info(f"Fundamentals cache MISS {ticker} ({quarter}) — fetching from Alpha Vantage")
+    ctx = ""
+    throttled = False
+    try:
+        df = av_client.get_fundamentals_batch([ticker])
+        ctx = formatter(df, ticker) or ""
+    except Exception as e:
+        # get_fundamentals_batch raises AlphaVantageError specifically when it got
+        # nothing AND that looks like throttling rather than genuine missing data.
+        # In that case we must NOT write an empty tombstone — otherwise a transient
+        # daily-cap hit would suppress this ticker's fundamentals for the whole
+        # quarter. Leave the cache untouched so the next run retries.
+        msg = str(e).lower()
+        throttled = ("throttl" in msg or "rate" in msg or "no fundamental data fetched" in msg)
+        logger.warning(f"Fundamentals fetch/format failed for {ticker}: {e} "
+                       f"(throttled={throttled})")
+        ctx = ""
+
+    if ctx:
+        set_fundamentals_cached(db, ticker, ctx, quarter)
+        logger.info(f"Fundamentals cached {ticker} ({quarter}) — {len(ctx)} chars")
+    elif throttled:
+        logger.info(
+            f"Fundamentals NOT cached {ticker} ({quarter}) — AV throttled; "
+            "will retry on next run rather than tombstoning the quarter"
+        )
+    else:
+        set_fundamentals_cached(db, ticker, FUNDAMENTALS_EMPTY_SENTINEL, quarter)
+        logger.info(
+            f"Fundamentals empty-cached {ticker} ({quarter}) — genuinely no data; "
+            "will not retry until next quarter"
+        )
+    return ctx
+
 
 
 def get_or_fetch_drift(db: Session, ticker: str, av_client) -> str:
