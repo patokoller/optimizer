@@ -98,6 +98,7 @@ def _qa_weighted_truncate(text: str, limit: int = 15_000, qa_fraction: float = 0
 # Kill switch: set env LLM_TWO_STAGE=0 to restore single-stage scoring.
 
 _CALIBRATION_MARKER = "SCORE CALIBRATION (anchor the number"
+_MATERIALS_MARKER = "\nTICKER:"
 
 
 def two_stage_enabled() -> bool:
@@ -105,9 +106,25 @@ def two_stage_enabled() -> bool:
 
 
 def split_prompt_materials(prompt: str) -> Optional[str]:
-    """Return the header+materials portion of a single-stage prompt (everything
-    before the SCORE CALIBRATION block), or None if the marker is absent —
-    in which case the ticker stays on the single-stage path."""
+    """Return the company-materials portion of a single-stage prompt — the
+    'TICKER: ... / --- COMPANY OVERVIEW --- / --- SEC FILINGS --- /
+    --- INCOME STATEMENT --- ...' block that carries the actual evidence.
+
+    In the current template the scoring rubric and SCORE CALIBRATION block come
+    FIRST, and the materials come AFTER. The previous implementation returned
+    everything *before* the calibration marker — i.e. the rubric with NO company
+    data — so the stage-1 extractor saw no filings, overview, or income statement
+    and emitted "none stated" for every field, which stage 2 then scored as a
+    "complete information void". Returning the materials block fixes that.
+
+    Falls back to the old behavior only if the materials marker is absent.
+    Returns None (→ single-stage path) if neither marker is found.
+    """
+    m_idx = prompt.find(_MATERIALS_MARKER)
+    if m_idx > 0:
+        return prompt[m_idx:].strip()
+    # Fallback: if the template ever changes, keep two-stage working off the
+    # pre-calibration portion rather than silently dropping to single-stage.
     idx = prompt.find(_CALIBRATION_MARKER)
     if idx <= 0:
         return None
