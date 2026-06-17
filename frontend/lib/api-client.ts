@@ -141,14 +141,32 @@ class APIClient {
       headers: { "Content-Type": "application/json" },
     });
 
-    // Response interceptor — convert snake_case keys + uniform error shape
+    // Response interceptor — convert snake_case keys + uniform error shape.
+    // Blob responses (e.g. PDF download) are passed through untouched because
+    // transformKeys turns a Blob into {} (Blobs have no enumerable properties),
+    // which breaks URL.createObjectURL and causes a TypeError on download.
     this.http.interceptors.response.use(
       (r) => {
-        r.data = transformKeys(r.data);
+        if (!(r.data instanceof Blob)) {
+          r.data = transformKeys(r.data);
+        }
         return r;
       },
       (err: AxiosError<{ detail: string }>) => {
-        const msg = err.response?.data?.detail ?? err.message ?? "Unknown error";
+        // When responseType is "blob", error response data is also a Blob.
+        // Parse it as text to extract the detail message.
+        const data = err.response?.data;
+        if (data instanceof Blob) {
+          return data.text().then((text) => {
+            try {
+              const parsed = JSON.parse(text);
+              return Promise.reject(new Error(parsed.detail ?? text));
+            } catch {
+              return Promise.reject(new Error(text || err.message));
+            }
+          });
+        }
+        const msg = (data as { detail?: string } | undefined)?.detail ?? err.message ?? "Unknown error";
         return Promise.reject(new Error(msg));
       }
     );
