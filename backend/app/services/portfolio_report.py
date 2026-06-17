@@ -122,11 +122,16 @@ def fallback_narrative(data: dict) -> dict:
     so the report is never blank."""
     cur, prop = data.get("risk_current", {}), data.get("risk_proposed", {})
     watch = data.get("watch_items") or []
-    n = len(data.get("holdings", []))
+    n = data.get("n_holdings", len(data.get("holdings", [])))
+    n_excl = data.get("n_excluded", 0)
+    excl_clause = (f" {n_excl} holding(s) are excluded from optimization for missing "
+                   f"price data and shown separately.") if n_excl else ""
     top_sec = next(iter(cur.get("sector_weights", {})), None)
+    sector_clause = (f"This {n}-position portfolio's largest exposure is {top_sec}."
+                     if data.get("sector_data_available") and top_sec
+                     else f"This portfolio holds {n} positions.")
     exec_s = (
-        f"This {n}-position portfolio's largest exposure is "
-        f"{top_sec or 'n/a'}. "
+        f"{sector_clause}{excl_clause} "
         f"{('Holdings flagged for review: ' + ', '.join(watch) + '. ') if watch else ''}"
         f"The proposed reallocation moves the Sharpe ratio from "
         f"{_n(cur.get('sharpe'))} to {_n(prop.get('sharpe'))} and concentration (HHI) "
@@ -140,7 +145,7 @@ def fallback_narrative(data: dict) -> dict:
     return {
         "exec_summary": exec_s,
         "risk_commentary": risk_s,
-        "closing": "Proposals are advisory and tie to each holding's score; the decision rests with you.",
+        "closing": "Proposals are advisory and optimizer-derived; each holding's score is shown for context, and the decision rests with you.",
     }
 
 
@@ -160,10 +165,23 @@ def generate_narrative(llm_scorer, data: dict) -> dict:
         if client is None:
             return fallback_narrative(data)
         # Compact, number-grounded context (no raw holdings dump beyond essentials).
+        # Drop sector_weights when there's no real sector data, so the model does
+        # not write about a "100% Unknown sector" that is just a missing dimension.
+        def _strip_sector(rd):
+            if not isinstance(rd, dict):
+                return rd
+            if data.get("sector_data_available"):
+                return rd
+            return {k: v for k, v in rd.items() if k != "sector_weights"}
         ctx = {
             "portfolio": data.get("portfolio_name"),
-            "risk_current": data.get("risk_current"),
-            "risk_proposed": data.get("risk_proposed"),
+            "position_counts": {
+                "total": data.get("n_holdings"),
+                "priced_and_optimized": data.get("n_priced"),
+                "excluded_no_price_data": data.get("n_excluded"),
+            },
+            "risk_current": _strip_sector(data.get("risk_current")),
+            "risk_proposed": _strip_sector(data.get("risk_proposed")),
             "watch_items": data.get("watch_items"),
             "actions": [{k: a[k] for k in ("ticker", "action", "delta")} for a in data.get("actions", [])],
             "holdings": [{"ticker": h["ticker"], "overall_score": h.get("overall_score"),
@@ -172,7 +190,9 @@ def generate_narrative(llm_scorer, data: dict) -> dict:
         prompt = (
             "You are a portfolio analyst writing a client-grade memo from the JSON below. "
             "Write in a precise, neutral, advisory voice — propose, do not command; tie claims "
-            "to the numbers. Do NOT invent figures not present. Return ONLY JSON with keys "
+            "to the numbers. Do NOT invent figures not present. When stating how many positions "
+            "the portfolio holds, use position_counts.total exactly; never count rows yourself. "
+            "Return ONLY JSON with keys "
             "exec_summary (3-4 sentences), risk_commentary (2-3 sentences), closing (1-2 sentences).\n\n"
             f"{json.dumps(ctx, default=str)}"
         )
@@ -297,6 +317,11 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
         ctx = {
             "portfolio": data.get("portfolio_name"),
             "regime": data.get("regime"),
+            "position_counts": {
+                "total": data.get("n_holdings"),
+                "priced_and_optimized": data.get("n_priced"),
+                "excluded_no_price_data": data.get("n_excluded"),
+            },
             "overall_posture_score": data.get("overall_posture_score"),
             "risk_current": data.get("risk_current"),
             "risk_proposed": data.get("risk_proposed"),
@@ -313,7 +338,8 @@ def generate_advisor_view(llm_scorer, data: dict) -> dict:
             "You are a seasoned portfolio advisor. From the JSON below, give YOUR OWN opinion on "
             "this portfolio — not a neutral summary. Take a clear position on what matters and what "
             "you would do, in a confident but advisory voice (you propose; the client decides). "
-            "Ground every claim in the data; invent no figures. Scores are an unvalidated research "
+            "Ground every claim in the data; invent no figures. When stating how many positions the "
+            "portfolio holds, use position_counts.total exactly; never count rows yourself. Scores are an unvalidated research "
             "signal, so lean on concentration, risk, drift and the proposed changes as much as on "
             "scores. Also argue both sides like a research desk: a bull_case (what would have to go "
             "right / the strongest reasons to stay constructive) and a bear_case (the strongest "
@@ -628,6 +654,21 @@ def build_report_data(
     from app.ml.portfolio_risk import monthly_movers
     movers = monthly_movers(returns_df, weights_current, window=21)
 
+    # Explicit, consistent position counts so the narrative never disagrees with
+    # the holdings table. total = every holding the user uploaded; priced = those
+    # the optimizer could act on; excluded = those with no price data.
+    n_total = len(holding_rows)
+    n_excluded = len(excluded)
+    n_priced = n_total - n_excluded
+
+    # Whether any holding has a real sector. Uploads carry only ticker/shares/cost,
+    # so sector is typically absent — flag it so the renderer can suppress a
+    # misleading "100% Unknown" sector chart rather than displaying a dead axis.
+    sector_data_available = any(
+        (s and str(s).strip().lower() not in ("", "unknown", "none"))
+        for s in sectors.values()
+    )
+
     data = {
         "portfolio_name": portfolio.name,
         "as_of": end.strftime("%Y-%m-%d"),
@@ -639,6 +680,10 @@ def build_report_data(
         "scores_status": ("ready" if bundle is not None else
                           ("training" if _bundle_refresh_running(db) else "absent")),
         "holdings": holding_rows,
+        "n_holdings": n_total,
+        "n_priced": n_priced,
+        "n_excluded": n_excluded,
+        "sector_data_available": sector_data_available,
         "risk_current": risk_current,
         "risk_proposed": risk_proposed,
         "proposed_weights": weights_proposed,
