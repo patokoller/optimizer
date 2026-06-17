@@ -281,16 +281,29 @@ def score_one(
         except Exception as e:
             logger.warning(f"score_one: filing context failed for {ticker}: {e}")
 
+        _fund_ctx = _format_fundamentals_context(fundamentals_df, ticker)
+        # Diagnostic: surface whether fundamentals actually reached the prompt and
+        # whether a stale cache entry is being served. Lets us see in the worker
+        # log why a name like GOOGL might still read "information void".
+        logger.info(
+            f"score_one[{ticker}]: fundamentals_df rows="
+            f"{0 if fundamentals_df is None else len(fundamentals_df)}, "
+            f"income_statement_context chars={len(_fund_ctx)}, "
+            f"filing_context chars={len(filing_ctx)}"
+        )
         prompt = llm_scorer.build_prompt(
             ticker=ticker,
             company_name=company_name,
             frequency=frequency,
             period=rebalance_date.strftime("%Y-%m") if rebalance_date else "",
             filing_context=filing_ctx,
-            income_statement_context=_format_fundamentals_context(fundamentals_df, ticker),
+            income_statement_context=_fund_ctx,
         )
         from app.ml.llm_cache import score_sync_cached
         period = rebalance_date.strftime("%Y-%m") if rebalance_date else ""
+        import hashlib as _hl
+        logger.info(f"score_one[{ticker}]: prompt len={len(prompt)} "
+                    f"hash={_hl.sha256(prompt.encode()).hexdigest()[:12]}")
         llm_result = score_sync_cached(db, llm_scorer, ticker, prompt, period)
     except Exception as e:
         logger.warning(f"score_one: LLM scoring failed for {ticker}: {e}")
