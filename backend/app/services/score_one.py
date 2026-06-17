@@ -281,10 +281,23 @@ def score_one(
         except Exception as e:
             logger.warning(f"score_one: filing context failed for {ticker}: {e}")
 
-        _fund_ctx = _format_fundamentals_context(fundamentals_df, ticker)
-        # Diagnostic: surface whether fundamentals actually reached the prompt and
-        # whether a stale cache entry is being served. Lets us see in the worker
-        # log why a name like GOOGL might still read "information void".
+        # Fundamentals context for the LLM, via a quarterly cache. If this run's
+        # live fetch (used by the ML models above) already returned data, format
+        # and cache it. If the live fetch came back empty (commonly AV's daily
+        # rate-limit on a multi-ticker report run), fall back to the cached
+        # context from an earlier run this quarter — so a transient throttle no
+        # longer turns a real company like GOOGL into a "complete information void".
+        from app.data import enrichment_cache as _ec
+        if fundamentals_df is not None and getattr(fundamentals_df, "empty", True) is False:
+            _fund_ctx = _format_fundamentals_context(fundamentals_df, ticker)
+            if _fund_ctx:
+                _ec.set_fundamentals_cached(db, ticker, _fund_ctx)
+        else:
+            # Live fetch yielded nothing this run; reuse a cached quarter value if present.
+            _fund_ctx = _ec.get_fundamentals_cached(db, ticker) or ""
+            if _fund_ctx == _ec.FUNDAMENTALS_EMPTY_SENTINEL:
+                _fund_ctx = ""
+        # Diagnostic: surface whether fundamentals actually reached the prompt.
         logger.info(
             f"score_one[{ticker}]: fundamentals_df rows="
             f"{0 if fundamentals_df is None else len(fundamentals_df)}, "
