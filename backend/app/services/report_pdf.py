@@ -574,10 +574,19 @@ def build_report_pdf(data: dict) -> bytes:
         story.append(Spacer(1, 16))
 
     # ── Allocation ───────────────────────────────────────────────────────────
-    charts = Table([[_donut(holdings), _sector_bar(cur.get("sector_weights", {}))]],
-                   colWidths=[content_w * 0.46, content_w * 0.54])
-    charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                                ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    # Only show the sector bar when real sector data exists. Uploads carry only
+    # ticker/shares/cost, so sector is usually absent — rendering a "100% Unknown"
+    # bar broadcasts a gap rather than information.
+    if data.get("sector_data_available"):
+        charts = Table([[_donut(holdings), _sector_bar(cur.get("sector_weights", {}))]],
+                       colWidths=[content_w * 0.46, content_w * 0.54])
+        charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                    ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    else:
+        charts = Table([[_donut(holdings)]], colWidths=[content_w])
+        charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                                    ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(KeepTogether(_section(ss, "Composition", "Holdings & allocation", content_w) + [charts]))
     story.append(Spacer(1, 6))
     story.append(_scorecard_table(ss, holdings, content_w))
@@ -621,11 +630,20 @@ def build_report_pdf(data: dict) -> bytes:
 
     # ── Proposed actions ─────────────────────────────────────────────────────
     story.append(Spacer(1, 16))
+    _opt = (data.get("optimizer") or "MVO").upper()
+    _opt_basis = {
+        "HRP": "weights are set by hierarchical risk parity (diversification across "
+               "correlation clusters), not by score",
+        "MVO": "weights are set by mean-variance optimization (the risk-return trade-off "
+               "across holdings), not by score alone",
+        "DEEP_RL": "weights are set by the reinforcement-learning policy balancing "
+                   "Sharpe and turnover",
+    }.get(_opt, "weights are optimizer-derived")
     story.append(KeepTogether(
         _section(ss, "Recommendations", "Proposed actions", content_w) + [
             Paragraph(
-                f"Optimizer: <b>{data.get('optimizer', 'MVO')}</b>. Proposals are advisory — each "
-                f"ties to the holding's score and is yours to accept, adjust, or reject.", ss["Small"]),
+                f"Optimizer: <b>{_opt}</b>. Proposals are advisory and yours to accept, adjust, "
+                f"or reject. Each holding's score is shown for context, but {_opt_basis}.", ss["Small"]),
             Spacer(1, 6),
         ]))
     story.append(_actions_table(ss, data.get("actions", []), content_w))
