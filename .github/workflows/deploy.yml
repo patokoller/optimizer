@@ -46,15 +46,17 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
+      # NOTE: the Vercel project's own "Root Directory" setting is `frontend`.
+      # Running these commands from the repo root lets Vercel apply that root
+      # exactly once. (Previously these ran with working-directory: frontend,
+      # so Vercel resolved frontend/frontend/package.json and failed with ENOENT.)
       - name: Pull Vercel project settings
-        working-directory: frontend
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Build
-        working-directory: frontend
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -63,7 +65,6 @@ jobs:
 
       - name: Deploy
         id: vercel-deploy
-        working-directory: frontend
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
