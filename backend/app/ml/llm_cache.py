@@ -31,11 +31,14 @@ logger = logging.getLogger(__name__)
 _PRUNE_KEEP_MONTHS = 4  # retain ~4 months of cache rows
 
 # Bump when the SCORING LOGIC changes in a way that should invalidate cached
-# results even though the prompt text is unchanged. v2: fixed two-stage
-# extraction to read the company-materials block (filings, income statement,
-# overview) instead of the scoring rubric — prior cached scores were computed
-# from an empty fact sheet and read "complete information void".
-_SCORING_LOGIC_VERSION = "v2-extraction-materials"
+# results even though the prompt text is unchanged.
+# v2: added the materials-extraction fix flag, BUT the version was set before the
+#     split_prompt_materials fix actually merged — so v2 cached results from the
+#     still-broken extractor (every card read "complete information void").
+# v3: split_prompt_materials now correctly feeds the company materials (filings,
+#     income statement, overview) to the stage-1 extractor. Bumping to v3 forces a
+#     one-time re-score with the fixed extractor so the void cards finally clear.
+_SCORING_LOGIC_VERSION = "v3-extraction-fixed"
 
 
 def prompt_fingerprint(prompt: str) -> str:
