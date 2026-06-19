@@ -33,10 +33,29 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+import os
+
+# CORS: allow the deployed frontend (and local dev) to call this API from the
+# browser. The production frontend is https://optimizer-tau.vercel.app; Vercel
+# preview deploys get https://<branch-hash>.vercel.app, covered by the regex.
+# Extra origins can be added via CORS_ALLOW_ORIGINS (comma-separated) without a
+# code change.
+_default_origins = [
+    "https://optimizer-tau.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+_env_origins = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",")
+    if o.strip()
+]
+_allow_origins = list(dict.fromkeys(_default_origins + _env_origins))
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_allow_origins,
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
