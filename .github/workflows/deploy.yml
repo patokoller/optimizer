@@ -27,52 +27,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   # ── Deploy frontend → Vercel ─────────────────────────────────────────
-  deploy-frontend:
-    name: Deploy frontend → Vercel
-    needs: ci-gate
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || contains(fromJSON('["all","frontend"]'), github.event.inputs.target)
-    environment:
-      name: ${{ github.event.inputs.environment || 'production' }}
-      url: ${{ steps.vercel-deploy.outputs.url }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Vercel CLI
-        run: npm install -g vercel@latest
-
-      # NOTE: the Vercel project's own "Root Directory" setting is `frontend`.
-      # Running these commands from the repo root lets Vercel apply that root
-      # exactly once. (Previously these ran with working-directory: frontend,
-      # so Vercel resolved frontend/frontend/package.json and failed with ENOENT.)
-      - name: Pull Vercel project settings
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy
-        id: vercel-deploy
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "Deployed: $URL"
-
   # ── Deploy backend → Railway ──────────────────────────────────────────
   deploy-backend:
     name: Deploy backend → Railway
