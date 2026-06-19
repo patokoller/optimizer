@@ -3,7 +3,7 @@
 > Based on: **Cohen, Aiche & Eichel (2025)**, *Entropy 27, 550*
 > "AI-Driven Portfolio Optimization: Integrating Machine Learning and Large Language Models for Enhanced Decision-Making"
 
-----
+-----
 
 ## Locked Benchmark Facts
 
