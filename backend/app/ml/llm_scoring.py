@@ -390,7 +390,16 @@ class LLMScorer:
             logger.warning("ANTHROPIC_API_KEY not set — LLM scoring unavailable.")
             self.client = None
         else:
-            self.client = anthropic.Anthropic(api_key=api_key)
+            # Reports score ~34 tickers x 2 calls (extract + score) back to back.
+            # The SDK default max_retries (2) gives up too early under a sustained
+            # burst of 429s, and a failed scoring call falls back to generic
+            # "information void" text — re-introducing the very voids we fixed.
+            # Raise retries so the SDK's exponential backoff outlasts the limit.
+            self.client = anthropic.Anthropic(
+                api_key=api_key,
+                max_retries=int(os.environ.get("ANTHROPIC_MAX_RETRIES", "8")),
+                timeout=float(os.environ.get("ANTHROPIC_TIMEOUT", "120")),
+            )
         logger.info(f"LLMScorer using model: {self.model}")
 
     def score(
