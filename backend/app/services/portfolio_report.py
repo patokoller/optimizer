@@ -621,11 +621,22 @@ def build_report_data(
     drift: dict[str, Optional[str]] = {}
     holding_rows = []
     sectors = {}
-    for h in holdings:
+    # Spread the per-ticker Claude calls out a little. Each ticker makes two API
+    # calls (two-stage extract + score); firing ~34 tickers back to back bursts
+    # past the account's requests-per-minute limit and many calls 429 → fall back
+    # to generic "information void" text. A short gap keeps us under the cap.
+    # Tunable via env; set to 0 to disable. Skipped when there's no bundle (no LLM
+    # calls happen) and after the last holding.
+    import time as _time
+    import os as _os
+    _pace = float(_os.environ.get("REPORT_SCORE_PACING_SECONDS", "1.5"))
+    for _i, h in enumerate(holdings):
         # When no bundle exists yet, every score_one call would just return
         # "no_model_bundle" — skip them (avoids N redundant DB loads + log spam).
         payload = score_one(db, h.ticker, alpaca=alpaca, llm_scorer=llm_scorer,
                             bundle=bundle) if bundle is not None else {}
+        if bundle is not None and _pace > 0 and _i < len(holdings) - 1:
+            _time.sleep(_pace)
         ov = payload.get("overall_score")
         scores_overall[h.ticker] = ov
         dtrend = _lookup_drift(db, h.ticker)
